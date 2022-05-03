@@ -768,7 +768,7 @@ impl Handler for IfHandler {
 
 fn eval(exp: Type, env:&mut Environment) -> Result<Type> {
     match exp {
-        Type::Symbol(ref s,_) => {
+        Type::Symbol(ref s,..) => {
             if exp.is_true()? || exp.is_false()? {
                 Ok(exp)
             } else {
@@ -778,7 +778,7 @@ fn eval(exp: Type, env:&mut Environment) -> Result<Type> {
                 }
             }
         },
-        Type::Number(_,_,_) => Ok(exp),
+        Type::Number(..) => Ok(exp),
         Type::Atom(ref s,ref n) => match s {
             Some(_) => eval(exp.as_symbol()?,env),
             _ => match n {
