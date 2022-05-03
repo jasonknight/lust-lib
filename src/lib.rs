@@ -219,11 +219,9 @@ impl Type {
 
     fn as_symbol(self) -> Result<Type> {
         match self.clone() {
-            Self::Atom(s,_) => {
-                match s {
-                    Some(b) => Ok(*b),
-                    _ => Err(unexpected!("symbol", format!("{:?}",self))), 
-                }
+            Self::Symbol(..) => Ok(self),
+            Self::Atom(Some(s),_) => {
+                Ok(*s)
             },
             _ => Err(LustError::Semantic(format!("{:?}",self),"be reduced to a Symbol".to_string())),
         }
@@ -231,13 +229,10 @@ impl Type {
 
     fn as_number(self) -> Result<Type> {
         match self.clone() {
-            Self::Atom(_,n) => {
-                match n {
-                    Some(b) => Ok(*b),
-                    _ => Err(unexpected!("Number", format!("{:?} to as_number",self))), 
-                }
+            Self::Atom(_,Some(n)) => {
+                Ok(*n)
             },
-            Self::Number(_,_,_) => Ok(self.clone()),
+            Self::Number(..) => Ok(self.clone()),
             _ => Err(LustError::Semantic(format!("{:?}",self),"be reduced to a number".to_string())),
         }
     }
@@ -252,9 +247,8 @@ impl Type {
     fn as_int(self) -> Result<i64> {
         
         match self.clone().as_number()? {
-            Self::Number(oi,_,_) => match oi {
-               Some(i) => Ok(i),
-                _ => Err(unexpected!("Number(int,_)", format!("{:?} during match",self))), 
+            Self::Number(Some(i),..) => {
+               Ok(i)
             },
             _ => Err(unexpected!("Number", format!("{:?} to as_int",self))), 
         }
@@ -262,9 +256,8 @@ impl Type {
 
     fn as_float(self) -> Result<f64> {
         match self.clone().as_number()? {
-            Self::Number(_,of,_) => match of {
-               Some(f) => Ok(f),
-               _ => Err(unexpected!("Number(_,float)", format!("{:?} to as_float",self))), 
+            Self::Number(_,Some(f),..) => {
+               Ok(f)
             },
             _ => Err(unexpected!("Number", format!("{:?} to as_float",self))), 
         }
@@ -272,9 +265,9 @@ impl Type {
 
     fn as_atom(self) -> Result<Type> {
         match self {
-            Self::Symbol(_,_) => Ok(Type::Atom(Some(self.as_boxed()),None)),
-            Self::Number(_,_,_) => Ok(Type::Atom(None,Some(self.as_boxed()))),
-            Self::Exp(a,_) => Ok(*a.unwrap()),
+            Self::Symbol(..) => Ok(Type::Atom(Some(self.as_boxed()),None)),
+            Self::Number(..) => Ok(Type::Atom(None,Some(self.as_boxed()))),
+            Self::Exp(Some(a),..) => Ok(*a),
             _ => Err(LustError::Semantic(format!("{:?}",self),"become atomic".to_string())), 
         }
     }
@@ -291,9 +284,8 @@ impl Type {
         let c = self.clone();
         match c {
             Self::List(_) => Ok(self),
-            Self::Exp(_,l) => match l {
-                Some(l) => Ok(*l),
-                _ => Err(unexpected!("List",format!("{:?}",self))), 
+            Self::Exp(_,Some(l)) => {
+                Ok(*l)
             },
             _ => Ok(Self::List(vec![self.clone()])), 
         }
@@ -314,10 +306,7 @@ impl Type {
         if ! self.is_list() {
             Err(internal!("cannot call head on a non list"))
         } else {
-           match self.clone().nth(0)? {
-                Some(h) => Ok(h),
-                _ => Err(internal!("head requires list have at least 1 element")),
-           }
+           self.clone().nth_or_err(0)
         }
     }
     // cdr
@@ -572,7 +561,7 @@ impl Handler for LambdaHandler {
                 for el in &list[2].clone().as_vec()? {
                     v.push(el.clone());
                 }
-                return eval_or_err(Type::List(v),env);
+                return eval(Type::List(v),env);
             } else if list[1].is_lambda()? {
                 let lambda = list[1].clone();
                 let arg_values = list[2].clone();
@@ -582,14 +571,14 @@ impl Handler for LambdaHandler {
                 let mut i = 0;
                 for sym in &arg_list.as_vec()? {
                     let name = sym.clone().as_string()?;  
-                    let value = eval_or_err(
+                    let value = eval(
                         arg_values.nth_or_err(i)?,
                         env,
                     )?;
                     local_env = local_env.add(&name,value); 
                     i += 1;
                 }
-                return eval_or_err(body,&mut local_env);
+                return eval(body,&mut local_env);
             } else {
                 Err(internal!("don't know what to do"))
             }
@@ -621,9 +610,9 @@ impl Handler for OpHandler {
         let mut bool_result = true;
         // This could be made faster with in comparison
         while i < list.len() {
-            let left = eval_or_err(list[i-1].clone(), env)?;
+            let left = eval(list[i-1].clone(), env)?;
             //let cleft = left.clone();
-            let right = eval_or_err(list[i].clone(), env)?;
+            let right = eval(list[i].clone(), env)?;
             //let cright = right.clone();
             if h.matches_string("lt?")? {
                 if left.is_int() {
@@ -706,10 +695,10 @@ impl Handler for ArithHandler {
             return Err(unexpected!("at least 2 arguments", format!("{}",list.len()-1)));
         }
         let nth = root.nth_or_err(1)?;
-        let mut sum = eval_or_err(nth,env)?.as_number()?;
+        let mut sum = eval(nth,env)?.as_number()?;
         let mut i = 2;
         while i < list.len() {
-            let cur = eval_or_err(root.nth_or_err(i)?,env)?;
+            let cur = eval(root.nth_or_err(i)?,env)?;
             
             if sum.is_int() {
                 if h.matches_string("+")? {
@@ -778,19 +767,15 @@ impl Handler for IfHandler {
 
     fn eval(&self, root: Type, env: &mut Environment) -> Result<Type> {
         let list = root.as_list()?.as_vec()?;
-        let pred = eval_or_err(list[1].clone(),env)?;
+        let pred = eval(list[1].clone(),env)?;
         if pred.is_true()? {
-            eval_or_err(list[2].clone(),env)
+            eval(list[2].clone(),env)
         } else if pred.is_false()? {
-            eval_or_err(list[3].clone(),env)
+            eval(list[3].clone(),env)
         } else {
             Err(LustError::Syntax("a predicate can only reduce to true or false".to_string()))
         }
     }
-}
-
-fn eval_or_err(exp: Type, env: &mut Environment) -> Result<Type> {
-   eval(exp,env) 
 }
 
 fn eval(exp: Type, env:&mut Environment) -> Result<Type> {
