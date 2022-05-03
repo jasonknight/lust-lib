@@ -103,35 +103,26 @@ impl Type {
     fn is_number(&self) -> bool {
         if self.is_atom() {
             return match self {
-                Self::Atom(_,n) => match n {
-                    Some(_) => true,
-                    _ => false,
-                },
+                Self::Atom(_,Some(n)) => true,
                 _ => false,
             };
         }
         match self {
-            Self::Number(_,_,_) => true,
+            Self::Number(..) => true,
             _ => false,
         }
     }
 
     fn is_int(&self) -> bool {
         self.is_number() && match self {
-            Self::Number(i,f,_) => match i {
-                Some(_) => true,
-                _ => false,
-            },
+            Self::Number(Some(i),f,..) => true,
             _ => false,
         }
     }
 
     fn is_float(&self) -> bool {
         self.is_number() && match self {
-            Self::Number(i,f,_) => match f {
-                Some(_) => true,
-                _ => false,
-            },
+            Self::Number(i,Some(f),..) => true,
             _ => false,
         }
     }
@@ -139,22 +130,19 @@ impl Type {
     fn is_symbol(&self) -> bool {
         if self.is_atom() {
             return match self {
-                Self::Atom(s,_) => match s {
-                    Some(_) => true,
-                    _ => false,
-                },
+                Self::Atom(Some(s),..) => true,
                 _ => false,
             };
         }
         match self {
-            Self::Symbol(_,_) => true,
+            Self::Symbol(..) => true,
             _ => false,
         }
     }
 
     fn is_exp(&self) -> bool {
         match self {
-            Self::Exp(_,_) => true,
+            Self::Exp(..) => true,
             _ => false,
         }
     }
