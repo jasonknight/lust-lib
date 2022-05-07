@@ -4,7 +4,7 @@ use thiserror::Error;
 
 macro_rules! sym {
     ($s:expr) => {
-        Type::Symbol($s.to_string(), TypeInfo { line: 0, column: 0 })
+        Type::Symbol($s.to_string(), TypeInfo { line: 0, column: 0, decl: TypeDecl::TString })
     };
     ($s:expr,$l:expr,$c:expr) => {
         Type::Symbol(
@@ -12,6 +12,7 @@ macro_rules! sym {
             TypeInfo {
                 line: $l,
                 column: $c,
+                decl: TypeDecl::TString(0),
             },
         )
     };
@@ -19,7 +20,7 @@ macro_rules! sym {
 
 macro_rules! int {
     ($i:expr) => {
-        Type::Number(Numerical::Int64($i), TypeInfo { line: 0, column: 0 })
+        Type::Number(Numerical::Int64($i), TypeInfo { line: 0, column: 0, decl: TypeDecl::TInt64 })
     };
     ($i:expr,$l:expr,$c:expr) => {
         Type::Number(
@@ -27,6 +28,7 @@ macro_rules! int {
             TypeInfo {
                 line: $l,
                 column: $c,
+                decl: TypeDecl::TInt64,
             },
         )
     };
@@ -34,7 +36,7 @@ macro_rules! int {
 
 macro_rules! float {
     ($i:expr) => {
-        Type::Number(Numerical::Float64($i), TypeInfo { line: 0, column: 0 })
+        Type::Number(Numerical::Float64($i), TypeInfo { line: 0, column: 0, decl: TypeDecl::TFloat64 })
     };
     ($i:expr,$l:expr,$c:expr) => {
         Type::Number(
@@ -42,6 +44,7 @@ macro_rules! float {
             TypeInfo {
                 line: $l,
                 column: $c,
+                decl: TypeDecl::TFloat64,
             },
         )
     };
@@ -49,13 +52,13 @@ macro_rules! float {
 
 macro_rules! bool_t {
     () => {
-        Type::Atom(Atomic::Boolean(Logical::True))
+        Type::Atom(Atomic::Boolean(Logical::True, TypeInfo { line: 0, column: 0, decl: TypeDecl::TBoolean }))
     };
 }
 
 macro_rules! bool_f {
     () => {
-        Type::Atom(Atomic::Boolean(Logical::False))
+        Type::Atom(Atomic::Boolean(Logical::False, TypeInfo { line: 0, column: 0, decl: TypeDecl::TBoolean} ))
     };
 }
 
@@ -110,13 +113,25 @@ static NON_LIST_FN: &str = "cannot called on non list";
 type Result<T> = std::result::Result<T, LustError>;
 
 #[derive(Debug, Clone)]
+enum TypeDecl {
+    TInt64,
+    TFloat64,
+    TString,
+    TBoolean,
+    TLambda,
+    /// The value is the index of the registered
+    /// user type
+    TUser(usize), 
+}
+#[derive(Debug, Clone)]
 struct TypeInfo {
     line: usize,
     column: usize,
+    decl: TypeDecl,
 }
 impl TypeInfo {
-    fn new(l: usize, c: usize) -> Self {
-        Self { line: l, column: c }
+    fn new(l: usize, c: usize, d: TypeDecl) -> Self {
+        Self { line: l, column: c, decl: d }
     }
 }
 
@@ -135,7 +150,7 @@ enum Logical {
 enum Atomic {
     Symbol(Box<Type>),
     Number(Box<Type>),
-    Boolean(Logical),
+    Boolean(Logical, TypeInfo),
 }
 
 #[derive(Debug, Clone)]
@@ -189,14 +204,14 @@ impl Type {
         if self.is_symbol() && self.clone().as_string()? == "true" {
             return Ok(true);
         }
-        Ok(matches!(self, Self::Atom(Atomic::Boolean(Logical::True))))
+        Ok(matches!(self, Self::Atom(Atomic::Boolean(Logical::True,..))))
     }
 
     fn is_false(&self) -> Result<bool> {
         if self.is_symbol() && self.clone().as_string()? == "false" {
             return Ok(true);
         }
-        Ok(matches!(self, Self::Atom(Atomic::Boolean(Logical::False))))
+        Ok(matches!(self, Self::Atom(Atomic::Boolean(Logical::False,..))))
     }
 
     fn is_bool(&self) -> Result<bool> {
@@ -419,9 +434,9 @@ fn atomize(token: String) -> Result<Type> {
             Err(_) => {
                 let sym = sym!(token.clone());
                 if sym.is_true()? {
-                    Ok(Type::Atom(Atomic::Boolean(Logical::True)))
+                    Ok(bool_t!())
                 } else if sym.is_false()? {
-                    Ok(Type::Atom(Atomic::Boolean(Logical::False)))
+                    Ok(bool_f!())
                 } else {
                     Ok(sym!(token.clone()).as_atom()?)
                 }
@@ -809,9 +824,9 @@ fn eval(exp: Type, env: &mut Environment) -> Result<Type> {
             }
         }
         Type::Number(..) => Ok(exp),
-        Type::Atom(Atomic::Symbol(_)) => eval(exp.as_symbol()?, env),
-        Type::Atom(Atomic::Number(_)) => eval(exp.as_number()?, env),
-        Type::Atom(Atomic::Boolean(_)) => Ok(exp),
+        Type::Atom(Atomic::Symbol(..)) => eval(exp.as_symbol()?, env),
+        Type::Atom(Atomic::Number(..)) => eval(exp.as_number()?, env),
+        Type::Atom(Atomic::Boolean(..)) => Ok(exp),
         Type::Exp(ref a, ref l) => match a {
             Some(_) => eval(exp.as_atom()?, env),
             _ => match l {
@@ -1048,7 +1063,7 @@ mod tests {
         let mut env = Environment::new();
         register_default_handlers(&mut env);
         let list = Type::List(vec![
-            Type::Symbol("%".to_string(), TypeInfo::new(0, 0)),
+            sym!("%"),
             float!(5.0),
             float!(3.0).as_atom()?,
         ]);
@@ -1061,7 +1076,7 @@ mod tests {
         let mut env = Environment::new();
         register_default_handlers(&mut env);
         let list = Type::List(vec![
-            Type::Symbol("/".to_string(), TypeInfo::new(0, 0)),
+            sym!("/"),
             float!(20.0),
             float!(5.0).as_atom()?,
         ]);
@@ -1069,7 +1084,7 @@ mod tests {
         assert_eq!(eval(list, &mut env)?.as_float()?, 4.0);
 
         let list = Type::List(vec![
-            Type::Symbol("/".to_string(), TypeInfo::new(0, 0)),
+            sym!("/"),
             float!(20.0),
             float!(0.0).as_atom()?,
         ]);
@@ -1082,7 +1097,7 @@ mod tests {
         let mut env = Environment::new();
         register_default_handlers(&mut env);
         let list = Type::List(vec![
-            Type::Symbol("*".to_string(), TypeInfo::new(0, 0)),
+            sym!("*"),
             float!(1.0),
             float!(5.0).as_atom()?,
             float!(5.0).as_atom()?,
@@ -1096,11 +1111,10 @@ mod tests {
         let mut env = Environment::new();
         register_default_handlers(&mut env);
         let list = Type::List(vec![
-            Type::Symbol("-".to_string(), TypeInfo::new(0, 0)),
+            sym!("-"),
             float!(3.0),
             float!(2.0).as_atom()?,
         ]);
-
         assert_eq!(eval(list, &mut env)?.as_float()?, 1.0);
         Ok(())
     }
@@ -1109,7 +1123,7 @@ mod tests {
         let mut env = Environment::new();
         register_default_handlers(&mut env);
         let list = Type::List(vec![
-            Type::Symbol("+".to_string(), TypeInfo::new(0, 0)),
+            sym!("+"),
             float!(1.0),
             float!(1.0).as_atom()?,
         ]);
@@ -1123,7 +1137,7 @@ mod tests {
         let mut env = Environment::new();
         register_default_handlers(&mut env);
         let list = Type::List(vec![
-            Type::Symbol("/".to_string(), TypeInfo::new(0, 0)),
+            sym!("/"),
             int!(20),
             int!(5).as_atom()?,
         ]);
@@ -1131,7 +1145,7 @@ mod tests {
         assert_eq!(eval(list, &mut env)?.as_int()?, 4);
 
         let list = Type::List(vec![
-            Type::Symbol("/".to_string(), TypeInfo::new(0, 0)),
+            sym!("/"),
             int!(20),
             int!(0).as_atom()?,
         ]);
@@ -1144,7 +1158,7 @@ mod tests {
         let mut env = Environment::new();
         register_default_handlers(&mut env);
         let list = Type::List(vec![
-            Type::Symbol("%".to_string(), TypeInfo::new(0, 0)),
+            sym!("%"),
             int!(5),
             int!(3).as_atom()?,
         ]);
@@ -1157,7 +1171,7 @@ mod tests {
         let mut env = Environment::new();
         register_default_handlers(&mut env);
         let list = Type::List(vec![
-            Type::Symbol("*".to_string(), TypeInfo::new(0, 0)),
+            sym!("*"),
             int!(1),
             int!(5).as_atom()?,
             int!(5).as_atom()?,
@@ -1172,7 +1186,7 @@ mod tests {
         let mut env = Environment::new();
         register_default_handlers(&mut env);
         let list = Type::List(vec![
-            Type::Symbol("-".to_string(), TypeInfo::new(0, 0)),
+            sym!("-"),
             int!(1),
             int!(1).as_atom()?,
         ]);
@@ -1186,7 +1200,7 @@ mod tests {
         let mut env = Environment::new();
         register_default_handlers(&mut env);
         let list = Type::List(vec![
-            Type::Symbol("+".to_string(), TypeInfo::new(0, 0)),
+            sym!("+"),
             int!(1),
             int!(1).as_atom()?,
         ]);
@@ -1197,9 +1211,9 @@ mod tests {
 
     #[test]
     fn test_booleans() -> Result<()> {
-        assert!(Type::Symbol("true".to_string(), TypeInfo::new(0, 0)).is_true()?);
-        assert!(Type::Symbol("false".to_string(), TypeInfo::new(0, 0)).is_false()?);
-        assert!(!Type::Symbol("false".to_string(), TypeInfo::new(0, 0)).is_true()?);
+        assert!(sym!("true").is_true()?);
+        assert!(sym!("false").is_false()?);
+        assert!(!sym!("false").is_true()?);
         Ok(())
     }
 
@@ -1255,7 +1269,7 @@ mod tests {
     fn test_eval() -> Result<()> {
         let mut env = Environment::new();
         register_default_handlers(&mut env);
-        let sym = Type::Symbol("hello".to_string(), TypeInfo::new(0, 0));
+        let sym = sym!("hello");
         env = env.add("hello", sym.clone());
         // It should look variables up
         assert_eq!(eval(sym, &mut env)?.as_string()?, "hello".to_string());
@@ -1320,7 +1334,7 @@ mod tests {
 
     #[test]
     fn test_type_as_symbol() -> Result<()> {
-        let atom = Type::Symbol("x".to_string(), TypeInfo::new(0, 0)).as_atom()?;
+        let atom = sym!("x").as_atom()?;
         let sym = atom.as_symbol()?;
         match sym {
             Type::Symbol(s, _) => assert_eq!(&*s, "x"),
@@ -1331,7 +1345,7 @@ mod tests {
 
     #[test]
     fn test_type_as_atom() -> Result<()> {
-        let atom = Type::Symbol("x".to_string(), TypeInfo::new(0, 0)).as_atom()?;
+        let atom = sym!("x").as_atom()?;
         assert!(atom.is_atom());
         assert_eq!(atom.clone().as_symbol()?.as_string()?, "x".to_string());
         Ok(())
