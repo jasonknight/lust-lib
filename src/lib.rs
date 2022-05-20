@@ -1,73 +1,77 @@
 use dyn_clone::DynClone;
 use std::collections::HashMap;
 use thiserror::Error;
+use std::str::FromStr;
 
 macro_rules! sym {
     ($s:expr) => {
-        Type::Symbol($s.to_string(), TypeInfo { line: 0, column: 0, decl: TypeDecl::TString })
+        Type::Symbol($s.to_string(), TypeInfo::new(0,0,TypeDecl::TString,ParenStyle::NotApplicable))
     };
     ($s:expr,$l:expr,$c:expr) => {
         Type::Symbol(
             $s.to_string(),
-            TypeInfo {
-                line: $l,
-                column: $c,
-                decl: TypeDecl::TString(0),
-            },
+            TypeInfo::new(
+                $l,
+                $c,
+                TypeDecl::TString,
+                ParenStyle::NotApplicable
+            ),
         )
     };
 }
 
 macro_rules! int {
     ($i:expr) => {
-        Type::Number(Numerical::Int64($i), TypeInfo { line: 0, column: 0, decl: TypeDecl::TInt64 })
+        Type::Number(Numerical::Int64($i), TypeInfo::new(0, 0, TypeDecl::TInt64,ParenStyle::NotApplicable))
     };
     ($i:expr,$l:expr,$c:expr) => {
         Type::Number(
             Numerical::Int64($i),
-            TypeInfo {
-                line: $l,
-                column: $c,
-                decl: TypeDecl::TInt64,
-            },
+            TypeInfo::new(
+                $l,
+                $c,
+                TypeDecl::TInt64,
+                ParenStyle::NotApplicable
+            ),
         )
     };
 }
 
 macro_rules! float {
     ($i:expr) => {
-        Type::Number(Numerical::Float64($i), TypeInfo { line: 0, column: 0, decl: TypeDecl::TFloat64 })
+        Type::Number(Numerical::Float64($i), TypeInfo::new(0,0,TypeDecl::TFloat64,ParenStyle::NotApplicable))
     };
     ($i:expr,$l:expr,$c:expr) => {
         Type::Number(
             Numerical::Float64($i),
-            TypeInfo {
-                line: $l,
-                column: $c,
-                decl: TypeDecl::TFloat64,
-            },
+            TypeInfo::new(
+                $l,
+                $c,
+                TypeDecl::TFloat64,
+                ParenStyle::NotApplicable
+            ),
         )
     };
 }
 
 macro_rules! bool_t {
     () => {
-        Type::Atom(Atomic::Boolean(Logical::True, TypeInfo { line: 0, column: 0, decl: TypeDecl::TBoolean }))
+        Type::Atom(Atomic::Boolean(Logical::True, TypeInfo::new(0,0,TypeDecl::TBoolean,ParenStyle::NotApplicable)))
     };
 }
 
 macro_rules! bool_f {
     () => {
-        Type::Atom(Atomic::Boolean(Logical::False, TypeInfo { line: 0, column: 0, decl: TypeDecl::TBoolean} ))
+        Type::Atom(Atomic::Boolean(Logical::False, TypeInfo::new(0,0,TypeDecl::TBoolean,ParenStyle::NotApplicable)))
     };
 }
 
 macro_rules! list {
     () => (
-        Type::List(Vec::new())
+        Type::List(Vec::new(),TypeInfo::default())
     );
     ($($x:expr),+ $(,)?) => (
-        Type::List(vec![$($x),+])
+        Type::List(vec![$($x),+],TypeInfo::default())
     );
 }
 
@@ -112,26 +116,94 @@ static NON_LIST_FN: &str = "cannot called on non list";
 
 type Result<T> = std::result::Result<T, LustError>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum TypeDecl {
+    TAny,
     TInt64,
     TFloat64,
     TString,
     TBoolean,
     TLambda,
+    TList,
     /// The value is the index of the registered
     /// user type
     TUser(usize), 
+}
+
+#[derive(Clone)]
+struct TypeDeclManager {
+    user_defined_types: Vec<String>,
+}
+impl TypeDeclManager {
+    fn new() -> Self {
+        Self {
+            user_defined_types: vec![],
+        }
+    }
+    fn add_str(&mut self,utype: &str) -> Result<usize> {
+        self.add(utype.to_string()) 
+    }
+    fn add(&mut self,utype: String) -> Result<usize> {
+        for user_type in &self.user_defined_types {
+           if *user_type == utype {
+               return Err(internal!(format!("Cannot redefine type {}!",utype)))
+           } 
+        }
+        self.user_defined_types.push(utype);
+        Ok(self.user_defined_types.len() - 1)
+    }
+    fn from_str(&self,tstr: &str) -> Result<TypeDecl> {
+        match tstr {
+            "TAny" => Ok(TypeDecl::TAny),
+            "TInt64" => Ok(TypeDecl::TInt64),
+            "TFloat64" => Ok(TypeDecl::TFloat64),
+            "TString" => Ok(TypeDecl::TString),
+            "TBoolean" => Ok(TypeDecl::TBoolean),
+            "TLambda" => Ok(TypeDecl::TLambda),
+            "TList" => Ok(TypeDecl::TList),
+            _ => {
+                match &tstr[..1] {
+                    "T" => {
+                        let as_str = tstr.to_string();
+                        for (i,user_type) in self.user_defined_types.iter().enumerate() {
+                           if as_str == *user_type {
+                               return Ok(TypeDecl::TUser(i)); 
+                           }
+                        }
+                        Err(internal!("not a defined type"))
+                    }
+                    _ => Err(internal!("not a type"))
+
+                }
+            }
+        }
+    }
+}
+#[derive(Debug,Clone)]
+enum ParenStyle {
+    LParen,
+    RParen,
+    LBrace,
+    RBrace,
+    LBracket,
+    RBracket,
+    LCarrot,
+    RCarrot,
+    NotApplicable,
 }
 #[derive(Debug, Clone)]
 struct TypeInfo {
     line: usize,
     column: usize,
     decl: TypeDecl,
+    paren_style: ParenStyle,
 }
 impl TypeInfo {
-    fn new(l: usize, c: usize, d: TypeDecl) -> Self {
-        Self { line: l, column: c, decl: d }
+    fn new(l: usize, c: usize, d: TypeDecl, pstyle: ParenStyle) -> Self {
+        Self { line: l, column: c, decl: d, paren_style: pstyle }
+    }
+    fn default() -> Self {
+        Self::new(0,0,TypeDecl::TAny,ParenStyle::NotApplicable)
     }
 }
 
@@ -154,17 +226,45 @@ enum Atomic {
 }
 
 #[derive(Debug, Clone)]
+enum Expressable {
+    Atom(Box<Type>),
+    List(Box<Type>),
+}
+
+#[derive(Debug, Clone)]
 enum Type {
     Symbol(String, TypeInfo),
     Number(Numerical, TypeInfo),
     /// Symbol, Number
     Atom(Atomic),
-    List(Vec<Type>),
+    List(Vec<Type>,TypeInfo),
     /// Atom, List
-    Exp(Option<Box<Type>>, Option<Box<Type>>),
+    Exp(Expressable),
 }
 
 impl Type {
+    fn get_decl_type(&self) -> TypeDecl {
+        match self {
+            Self::Atom(Atomic::Number(ref n)) => {
+               if let Self::Number(_,ref info) = **n {
+                   info.decl.clone()
+               } else {
+                    panic!("wtf");
+               }
+            }, 
+            Self::Number(_,info) => info.decl.clone(),
+            Self::List(..) => TypeDecl::TList,
+            Self::Symbol(_,info) => info.decl.clone(),
+            Self::Exp(Expressable::Atom(a)) => a.get_decl_type(),
+            Self::Exp(Expressable::List(_)) => TypeDecl::TList,
+            _ => panic!("wtf"),
+       }
+    }
+    fn is_same_type_as(&self,other:Type) -> bool {
+       let self_type = self.get_decl_type();
+       let other_type = other.get_decl_type();
+       self_type == other_type
+    }
     fn is_atom(&self) -> bool {
         matches!(self, Self::Atom(..))
     }
@@ -195,7 +295,7 @@ impl Type {
 
     fn is_lambda(&self) -> Result<bool> {
         match self {
-            Self::List(l) => Ok(l[0].clone().matches_string("lambda")?),
+            Self::List(l,_) => Ok(l[0].clone().matches_string("fn")?),
             _ => Ok(false),
         }
     }
@@ -287,7 +387,7 @@ impl Type {
         match self {
             Self::Symbol(..) => Ok(Type::Atom(Atomic::Symbol(self.as_boxed()))),
             Self::Number(..) => Ok(Type::Atom(Atomic::Number(self.as_boxed()))),
-            Self::Exp(Some(a), ..) => Ok(*a.clone()),
+            Self::Exp(Expressable::Atom(a)) => Ok(*a.clone()),
             _ => Err(LustError::Semantic(
                 format!("{:?}", self),
                 "become atomic".to_string(),
@@ -297,8 +397,8 @@ impl Type {
 
     fn as_exp(&self) -> Result<Type> {
         match self {
-            Self::Atom(..) => Ok(Self::Exp(Some(self.as_boxed()), None)),
-            Self::List(_) => Ok(Self::Exp(None, Some(self.as_boxed()))),
+            Self::Atom(..) => Ok(Self::Exp(Expressable::Atom(self.as_boxed()))),
+            Self::List(_,..) => Ok(Self::Exp(Expressable::List(self.as_boxed()))),
             _ => Err(LustError::Semantic(
                 format!("{:?}", self),
                 "become an Expression".to_string(),
@@ -308,15 +408,15 @@ impl Type {
 
     fn as_list(&self) -> Result<Type> {
         match self {
-            Self::List(_) => Ok(self.clone()),
-            Self::Exp(_, Some(l)) => Ok(*l.clone()),
-            _ => Ok(Self::List(vec![self.clone()])),
+            Self::List(_,..) => Ok(self.clone()),
+            Self::Exp(Expressable::List(l)) => Ok(*l.clone()),
+            _ => Ok(list!(self.clone())),
         }
     }
 
     fn as_vec(&self) -> Result<Vec<Type>> {
         match self.as_list()? {
-            Type::List(l) => Ok(l),
+            Type::List(l,..) => Ok(l),
             _ => Err(unexpected!("List", format!("{:?}", self))),
         }
     }
@@ -338,8 +438,9 @@ impl Type {
             Err(internal!(&format!("{} {}", "head", NON_LIST_FN)))
         } else {
             match self {
-                Type::List(lst) => Ok(Type::List(
+                Type::List(lst,ti) => Ok(Type::List(
                     lst[1..].iter().map(|t| t.clone()).collect::<Vec<Type>>(),
+                    ti.clone()
                 )),
                 _ => Err(internal!("Unreachable")),
             }
@@ -351,7 +452,7 @@ impl Type {
             return Ok(None);
         }
         match self {
-            Self::List(elements) => {
+            Self::List(elements,..) => {
                 if i > elements.len() {
                     return Ok(None);
                 }
@@ -385,6 +486,7 @@ dyn_clone::clone_trait_object!(Handler);
 
 #[derive(Clone)]
 struct Environment {
+    type_manager: TypeDeclManager,
     vars: HashMap<String, Type>,
     handlers: Vec<Box<dyn Handler>>,
 }
@@ -394,6 +496,7 @@ impl Environment {
         Self {
             vars: HashMap::new(),
             handlers: vec![],
+            type_manager: TypeDeclManager::new(),
         }
     }
 
@@ -446,14 +549,16 @@ fn atomize(token: String) -> Result<Type> {
 }
 
 fn is_lparen(s: &str) -> bool {
-    if s == "(" {
+    let lparens = vec!["(","{","[","<"];
+    if lparens.contains(&s) {
         return true;
     }
     false
 }
 
 fn is_rparen(s: &str) -> bool {
-    if s == ")" {
+    let rparens = vec![")","}","]",">"];
+    if rparens.contains(&s) {
         return true;
     }
     false
@@ -484,13 +589,24 @@ fn read_from_tokens(tokens: &[String], start: usize) -> Result<(Type, usize)> {
             i = i2;
         }
         i += 1;
-        return Ok((Type::List(list).as_exp()?, i));
+        return Ok((Type::List(list,TypeInfo::default()).as_exp()?, i));
     } else if is_rparen(&*tokens[i]) {
         return Err(unexpected!("anything", ")"));
     } else {
         return Ok((atomize(tokens[i].clone())?.as_exp()?, i + 1));
     }
 }
+
+#[derive(Clone)]
+// Do is like progn, it basically helps you execute a series of s-exprs
+// (do (let x (+ 1 2)) (* x x))
+// This is most useful with a lambda
+// (fn (x) 
+//   (do 
+//     (let y (* x x)) 
+//     (+ y 4)))
+struct DoHandler {}
+
 #[derive(Clone)]
 struct LambdaHandler {}
 impl Handler for LambdaHandler {
@@ -498,28 +614,28 @@ impl Handler for LambdaHandler {
         let list_root = root.as_list()?;
         let h = list_root.clone().head()?;
         match &list_root {
-            Type::List(lst) => match &lst[0] {
+            Type::List(lst,..) => match &lst[0] {
                 Type::Symbol(_, _) => {
-                    if sym_matches!(h, "lambda") {
+                    if sym_matches!(h, "fn") {
                         // In this case it must have 2 arguments, both must be lists
-                        // (lambda (a b c) (+ a b c)
-                        // (lambda (a b c) (do (+ a b c))
+                        // (fn (a b c) (+ a b c)
+                        // (fn (a b c) (do (+ a b c))
                         if lst.len() != 3 {
-                            Err(internal!("lambda expects 2 arguments, a list of arguments and an executable list"))
+                            Err(internal!("fn expects 2 arguments, a list of arguments and an executable list"))
                         } else if !lst[1].clone().is_list() && lst[2].clone().is_list() {
                             println!("4: {:?}", lst.clone());
                             Err(internal!(format!(
-                                "the 2 arguments to lambda must be lists got {:?} and {:?}",
+                                "the 2 arguments to fn must be lists got {:?} and {:?}",
                                 lst[1], lst[2]
                             )))
                         } else {
                             Ok(true)
                         }
-                    } else if sym_matches!(h, "lambda?") {
+                    } else if sym_matches!(h, "fn?") {
                         for l in &lst[1..] {
                             if !l.is_list() {
                                 return Err(internal!(format!(
-                                    "arguments to lambda must be lists, got {:?}",
+                                    "arguments to fn must be lists, got {:?}",
                                     l
                                 )));
                             }
@@ -547,18 +663,21 @@ impl Handler for LambdaHandler {
 
     fn can(&self, root: Type) -> Result<bool> {
         let h = root.as_list()?.head()?;
-        Ok(sym_matches!(h, "lambda?", "lambda", "apply", "applicable?"))
+        Ok(sym_matches!(h, "fn?", "fn", "apply", "applicable?"))
     }
 
     fn eval(&self, root: Type, env: &mut Environment) -> Result<Type> {
         let list = root.clone().as_list()?.as_vec()?;
         let h = root.head()?;
-        if sym_matches!(h, "lambda") {
+        if sym_matches!(h, "fn") {
             Ok(root.as_list()?)
-        } else if sym_matches!(h, "lambda?") {
+        } else if sym_matches!(h, "fn?") {
             let mut bool_result = true;
             for l in &list[1..] {
-                bool_result = bool_result && l.is_lambda()?;
+                if !l.is_lambda()? {
+                    bool_result = false;
+                    break;
+                }
             }
             if bool_result {
                 Ok(bool_t!())
@@ -574,6 +693,7 @@ impl Handler for LambdaHandler {
                         bool_result = true;
                     } else {
                         // must iter handlers
+                        bool_result = false;
                         for hd in &env.handlers {
                             if hd.can(l.clone())? {
                                 bool_result = true;
@@ -582,6 +702,7 @@ impl Handler for LambdaHandler {
                     }
                 } else if l.is_symbol() {
                     // must iter handlers
+                    bool_result = false;
                     for hd in &env.handlers {
                         if hd.can(l.clone())? {
                             bool_result = true;
@@ -596,12 +717,14 @@ impl Handler for LambdaHandler {
             }
         } else if sym_matches!(h, "apply") {
             if list[1].is_symbol() {
+                // (apply + (1 2)
                 let mut v = vec![list[1].clone()];
                 for el in &list[2].clone().as_vec()? {
                     v.push(el.clone());
                 }
-                return eval(Type::List(v), env);
+                return eval(Type::List(v,TypeInfo::default()), env);
             } else if list[1].is_lambda()? {
+                // (apply (fn (a b) (+ a b)) (1 2))
                 let lambda = list[1].clone();
                 let arg_values = list[2].clone();
                 let arg_list = lambda.tail()?.head()?;
@@ -827,14 +950,9 @@ fn eval(exp: Type, env: &mut Environment) -> Result<Type> {
         Type::Atom(Atomic::Symbol(..)) => eval(exp.as_symbol()?, env),
         Type::Atom(Atomic::Number(..)) => eval(exp.as_number()?, env),
         Type::Atom(Atomic::Boolean(..)) => Ok(exp),
-        Type::Exp(ref a, ref l) => match a {
-            Some(_) => eval(exp.as_atom()?, env),
-            _ => match l {
-                Some(_) => eval(exp.as_list()?, env),
-                _ => Err(internal!(format!("don't know how to eval {:?}", exp))),
-            },
-        },
-        Type::List(_) => {
+        Type::Exp(Expressable::Atom(_)) => eval(exp.as_atom()?, env),
+        Type::Exp(Expressable::List(_)) => eval(exp.as_list()?, env),
+        Type::List(_,..) => {
             for handler in &env.clone().handlers {
                 if handler.can(exp.clone())? && handler.is_valid(exp.clone())? {
                     return handler.eval(exp, env);
@@ -857,12 +975,32 @@ fn register_default_handlers(env: &mut Environment) {
 mod tests {
     use super::*;
     #[test]
+    fn test_typedeclmanager() -> Result<()> {
+        let mut manager = TypeDeclManager::new();
+        manager.user_defined_types.push("TCustomType".to_string());
+        assert_eq!(manager.from_str("TCustomType").unwrap(),TypeDecl::TUser(0));
+        let i = manager.add_str("TCustomType");
+        assert!(i.is_err());
+        let i = manager.add_str("TCustomType2");
+        assert_eq!(i.unwrap(),1);
+        Ok(())
+    }
+    #[test]
+    fn test_type_comparison() -> Result<()> {
+        let t1 = int!(1);
+        let t2 = int!(2);
+        assert!(t1.is_same_type_as(t2));
+        let t3 = float!(1.0);
+        assert!(!t1.is_same_type_as(t3));
+        Ok(())
+    }
+    #[test]
     fn test_lambda_handler_eval_apply_lambda() -> Result<()> {
         let mut env = Environment::new();
         register_default_handlers(&mut env);
         let handler = LambdaHandler {};
         let lambda = list!(
-            sym!("lambda"),
+            sym!("fn"),
             list!(sym!("x"), sym!("y"),),
             list!(sym!("+"), sym!("x"), sym!("y"), int!(1),)
         );
@@ -886,7 +1024,7 @@ mod tests {
         let mut env = Environment::new();
         register_default_handlers(&mut env);
         let handler = LambdaHandler {};
-        let lambda = list!(sym!("lambda"), list!(), list!(sym!("+"), int!(1), int!(2)));
+        let lambda = list!(sym!("fn"), list!(), list!(sym!("+"), int!(1), int!(2)));
         assert!(handler.eval(lambda.clone(), &mut env)?.is_lambda()?);
 
         Ok(())
@@ -897,12 +1035,12 @@ mod tests {
         register_default_handlers(&mut env);
         // A lambda just returns a lambda
         let handler = LambdaHandler {};
-        let lambda = list!(sym!("lambda"), list!(), list!());
-        let lambdap = list!(sym!("lambda?"), lambda.clone(), lambda.clone(),);
+        let lambda = list!(sym!("fn"), list!(), list!());
+        let lambdap = list!(sym!("fn?"), lambda.clone(), lambda.clone(),);
 
         assert!(handler.eval(lambdap, &mut env)?.is_true()?);
 
-        let lambdap_false = list!(sym!("lambda?"), lambda.clone(), bool_t!(),);
+        let lambdap_false = list!(sym!("fn?"), lambda.clone(), bool_t!(),);
 
         assert!(handler.eval(lambdap_false, &mut env)?.is_false()?);
 
@@ -914,7 +1052,7 @@ mod tests {
         register_default_handlers(&mut env);
         // A lambda just returns a lambda
         let handler = LambdaHandler {};
-        let lambda = list!(sym!("lambda"), list!(), list!());
+        let lambda = list!(sym!("fn"), list!(), list!());
         let applyp = list!(
             sym!("applicable?"),
             lambda.clone(),
@@ -937,12 +1075,12 @@ mod tests {
     #[test]
     fn test_lambda_handler_is_valid() -> Result<()> {
         let handler = LambdaHandler {};
-        assert!(list!(sym!("lambda")).is_lambda()?);
-        assert!(handler.is_valid(list!(sym!("lambda"))).is_err());
-        assert!(handler.is_valid(list!(sym!("lambda"), list!(), list!()))?);
-        assert!(handler.is_valid(list!(sym!("lambda?"), list!(), list!()))?);
+        assert!(list!(sym!("fn")).is_lambda()?);
+        assert!(handler.is_valid(list!(sym!("fn"))).is_err());
+        assert!(handler.is_valid(list!(sym!("fn"), list!(), list!()))?);
+        assert!(handler.is_valid(list!(sym!("fn?"), list!(), list!()))?);
         assert!(handler
-            .is_valid(list!(sym!("lambda?"), list!(), sym!("lll")))
+            .is_valid(list!(sym!("fn?"), list!(), sym!("lll")))
             .is_err());
         assert!(handler
             .is_valid(list!(sym!("apply"), list!(), int!(1)))
@@ -956,8 +1094,8 @@ mod tests {
         let mut env = Environment::new();
         register_default_handlers(&mut env);
         let handler = LambdaHandler {};
-        assert!(handler.can(list!(sym!("lambda")))?);
-        assert!(handler.can(list!(sym!("lambda?")))?);
+        assert!(handler.can(list!(sym!("fn")))?);
+        assert!(handler.can(list!(sym!("fn?")))?);
         assert!(handler.can(list!(sym!("apply")))?);
         Ok(())
     }
@@ -1030,28 +1168,36 @@ mod tests {
 
         assert!(eval(list, &mut env)?.is_true()?);
 
-        let list = Type::List(vec![sym!("eq?"), int!(5), int!(5)]);
+        let list = list!(sym!("eq?"), int!(5), int!(5));
 
         assert!(eval(list, &mut env)?.is_true()?);
 
-        let list = Type::List(vec![sym!("eq?"), int!(5), int!(3)]);
+        let list = list!(sym!("eq?"), int!(5), int!(3));
 
         assert!(eval(list, &mut env)?.is_false()?);
 
         // Equivalent to: (eq (+ 1 (/ 10 5)) 3)
-        let list = Type::List(vec![
+        let list = list!(
             sym!("eq?"),
-            list!(sym!("+"), int!(1), list!(sym!("/"), int!(10), int!(5),),),
+            list!(
+                sym!("+"), 
+                int!(1), 
+                list!(
+                    sym!("/"), 
+                    int!(10), 
+                    int!(5),
+                ),
+            ),
             int!(3),
-        ]);
+        );
 
         assert!(eval(list, &mut env)?.is_true()?);
 
-        let list = Type::List(vec![sym!("eq?"), sym!("hello"), sym!("hello")]);
+        let list = list!(sym!("eq?"), sym!("hello"), sym!("hello"));
 
         assert!(eval(list, &mut env)?.is_true()?);
         env = env.add("$hello", sym!("world"));
-        let list = Type::List(vec![sym!("eq?"), sym!("$hello"), sym!("world")]);
+        let list = list!(sym!("eq?"), sym!("$hello"), sym!("world"));
 
         assert!(eval(list, &mut env)?.is_true()?);
 
@@ -1062,11 +1208,11 @@ mod tests {
     fn test_float_remainder() -> Result<()> {
         let mut env = Environment::new();
         register_default_handlers(&mut env);
-        let list = Type::List(vec![
+        let list = list!(
             sym!("%"),
             float!(5.0),
             float!(3.0).as_atom()?,
-        ]);
+        );
 
         assert_eq!(eval(list, &mut env)?.as_float()?, 2.0);
         Ok(())
@@ -1075,19 +1221,19 @@ mod tests {
     fn test_float_division() -> Result<()> {
         let mut env = Environment::new();
         register_default_handlers(&mut env);
-        let list = Type::List(vec![
+        let list = list!(
             sym!("/"),
             float!(20.0),
             float!(5.0).as_atom()?,
-        ]);
+        );
 
         assert_eq!(eval(list, &mut env)?.as_float()?, 4.0);
 
-        let list = Type::List(vec![
+        let list = list!(
             sym!("/"),
             float!(20.0),
             float!(0.0).as_atom()?,
-        ]);
+        );
 
         assert!(eval(list, &mut env).is_err());
         Ok(())
@@ -1096,12 +1242,12 @@ mod tests {
     fn test_float_multiplication() -> Result<()> {
         let mut env = Environment::new();
         register_default_handlers(&mut env);
-        let list = Type::List(vec![
+        let list = list!(
             sym!("*"),
             float!(1.0),
             float!(5.0).as_atom()?,
             float!(5.0).as_atom()?,
-        ]);
+        );
 
         assert_eq!(eval(list, &mut env)?.as_float()?, 25.0);
         Ok(())
@@ -1110,11 +1256,11 @@ mod tests {
     fn test_float_subtraction() -> Result<()> {
         let mut env = Environment::new();
         register_default_handlers(&mut env);
-        let list = Type::List(vec![
+        let list = list!(
             sym!("-"),
             float!(3.0),
             float!(2.0).as_atom()?,
-        ]);
+        );
         assert_eq!(eval(list, &mut env)?.as_float()?, 1.0);
         Ok(())
     }
@@ -1122,11 +1268,11 @@ mod tests {
     fn test_float_addition() -> Result<()> {
         let mut env = Environment::new();
         register_default_handlers(&mut env);
-        let list = Type::List(vec![
+        let list = list!(
             sym!("+"),
             float!(1.0),
             float!(1.0).as_atom()?,
-        ]);
+        );
 
         assert_eq!(eval(list, &mut env)?.as_float()?, 2.0);
         Ok(())
@@ -1136,19 +1282,19 @@ mod tests {
     fn test_division() -> Result<()> {
         let mut env = Environment::new();
         register_default_handlers(&mut env);
-        let list = Type::List(vec![
+        let list = list!(
             sym!("/"),
             int!(20),
             int!(5).as_atom()?,
-        ]);
+        );
 
         assert_eq!(eval(list, &mut env)?.as_int()?, 4);
 
-        let list = Type::List(vec![
+        let list = list!(
             sym!("/"),
             int!(20),
             int!(0).as_atom()?,
-        ]);
+        );
 
         assert!(eval(list, &mut env).is_err());
         Ok(())
@@ -1157,11 +1303,11 @@ mod tests {
     fn test_remainder() -> Result<()> {
         let mut env = Environment::new();
         register_default_handlers(&mut env);
-        let list = Type::List(vec![
+        let list = list!(
             sym!("%"),
             int!(5),
             int!(3).as_atom()?,
-        ]);
+        );
 
         assert_eq!(eval(list, &mut env)?.as_int()?, 2);
         Ok(())
@@ -1170,12 +1316,12 @@ mod tests {
     fn test_multiplication() -> Result<()> {
         let mut env = Environment::new();
         register_default_handlers(&mut env);
-        let list = Type::List(vec![
+        let list = list!(
             sym!("*"),
             int!(1),
             int!(5).as_atom()?,
             int!(5).as_atom()?,
-        ]);
+        );
 
         assert_eq!(eval(list, &mut env)?.as_int()?, 25);
         Ok(())
@@ -1185,11 +1331,11 @@ mod tests {
     fn test_subtraction() -> Result<()> {
         let mut env = Environment::new();
         register_default_handlers(&mut env);
-        let list = Type::List(vec![
+        let list = list!(
             sym!("-"),
             int!(1),
             int!(1).as_atom()?,
-        ]);
+        );
 
         assert_eq!(eval(list, &mut env)?.as_int()?, 0);
         Ok(())
@@ -1199,11 +1345,11 @@ mod tests {
     fn test_addition() -> Result<()> {
         let mut env = Environment::new();
         register_default_handlers(&mut env);
-        let list = Type::List(vec![
+        let list = list!(
             sym!("+"),
             int!(1),
             int!(1).as_atom()?,
-        ]);
+        );
 
         assert_eq!(eval(list, &mut env)?.as_int()?, 2);
         Ok(())
