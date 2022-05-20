@@ -154,27 +154,21 @@ impl TypeDeclManager {
     }
     fn from_str(&self,tstr: &str) -> Result<TypeDecl> {
         match tstr {
-            "TAny" => Ok(TypeDecl::TAny),
-            "TInt64" => Ok(TypeDecl::TInt64),
-            "TFloat64" => Ok(TypeDecl::TFloat64),
-            "TString" => Ok(TypeDecl::TString),
-            "TBoolean" => Ok(TypeDecl::TBoolean),
-            "TLambda" => Ok(TypeDecl::TLambda),
-            "TList" => Ok(TypeDecl::TList),
+            "any_t" => Ok(TypeDecl::TAny),
+            "i64_t" => Ok(TypeDecl::TInt64),
+            "f64_t" => Ok(TypeDecl::TFloat64),
+            "str_t" => Ok(TypeDecl::TString),
+            "bool_t" => Ok(TypeDecl::TBoolean),
+            "fn_t" => Ok(TypeDecl::TLambda),
+            "list_t" => Ok(TypeDecl::TList),
             _ => {
-                match &tstr[..1] {
-                    "T" => {
-                        let as_str = tstr.to_string();
-                        for (i,user_type) in self.user_defined_types.iter().enumerate() {
-                           if as_str == *user_type {
-                               return Ok(TypeDecl::TUser(i)); 
-                           }
-                        }
-                        Err(internal!("not a defined type"))
-                    }
-                    _ => Err(internal!("not a type"))
-
+                let as_str = tstr.to_string();
+                for (i,user_type) in self.user_defined_types.iter().enumerate() {
+                   if as_str == *user_type {
+                       return Ok(TypeDecl::TUser(i)); 
+                   }
                 }
+                Err(internal!(format!("{} is not a defined type",as_str)))
             }
         }
     }
@@ -973,15 +967,16 @@ fn register_default_handlers(env: &mut Environment) {
 
 #[cfg(test)]
 mod tests {
+    //(<TInt64,TInt64> fn (a b) <TInt64> (+ a b))
     use super::*;
     #[test]
     fn test_typedeclmanager() -> Result<()> {
         let mut manager = TypeDeclManager::new();
-        manager.user_defined_types.push("TCustomType".to_string());
-        assert_eq!(manager.from_str("TCustomType").unwrap(),TypeDecl::TUser(0));
-        let i = manager.add_str("TCustomType");
+        manager.user_defined_types.push("CustomType".to_string());
+        assert_eq!(manager.from_str("CustomType").unwrap(),TypeDecl::TUser(0));
+        let i = manager.add_str("CustomType");
         assert!(i.is_err());
-        let i = manager.add_str("TCustomType2");
+        let i = manager.add_str("CustomType2");
         assert_eq!(i.unwrap(),1);
         Ok(())
     }
