@@ -5,7 +5,7 @@ use std::str::FromStr;
 
 macro_rules! sym {
     ($s:expr) => {
-        Type::Symbol($s.to_string(), TypeInfo::new(0,0,TypeDecl::TString,ParenStyle::NotApplicable))
+        Type::Symbol($s.to_string(), TypeInfo::new(0,0,TypeDecl::TString))
     };
     ($s:expr,$l:expr,$c:expr) => {
         Type::Symbol(
@@ -14,7 +14,6 @@ macro_rules! sym {
                 $l,
                 $c,
                 TypeDecl::TString,
-                ParenStyle::NotApplicable
             ),
         )
     };
@@ -22,7 +21,7 @@ macro_rules! sym {
 
 macro_rules! int {
     ($i:expr) => {
-        Type::Number(Numerical::Int64($i), TypeInfo::new(0, 0, TypeDecl::TInt64,ParenStyle::NotApplicable))
+        Type::Number(Numerical::Int64($i), TypeInfo::new(0, 0, TypeDecl::TInt64))
     };
     ($i:expr,$l:expr,$c:expr) => {
         Type::Number(
@@ -31,7 +30,6 @@ macro_rules! int {
                 $l,
                 $c,
                 TypeDecl::TInt64,
-                ParenStyle::NotApplicable
             ),
         )
     };
@@ -39,7 +37,7 @@ macro_rules! int {
 
 macro_rules! float {
     ($i:expr) => {
-        Type::Number(Numerical::Float64($i), TypeInfo::new(0,0,TypeDecl::TFloat64,ParenStyle::NotApplicable))
+        Type::Number(Numerical::Float64($i), TypeInfo::new(0,0,TypeDecl::TFloat64))
     };
     ($i:expr,$l:expr,$c:expr) => {
         Type::Number(
@@ -48,7 +46,6 @@ macro_rules! float {
                 $l,
                 $c,
                 TypeDecl::TFloat64,
-                ParenStyle::NotApplicable
             ),
         )
     };
@@ -56,13 +53,13 @@ macro_rules! float {
 
 macro_rules! bool_t {
     () => {
-        Type::Atom(Atomic::Boolean(Logical::True, TypeInfo::new(0,0,TypeDecl::TBoolean,ParenStyle::NotApplicable)))
+        Type::Atom(Atomic::Boolean(Logical::True, TypeInfo::new(0,0,TypeDecl::TBoolean)))
     };
 }
 
 macro_rules! bool_f {
     () => {
-        Type::Atom(Atomic::Boolean(Logical::False, TypeInfo::new(0,0,TypeDecl::TBoolean,ParenStyle::NotApplicable)))
+        Type::Atom(Atomic::Boolean(Logical::False, TypeInfo::new(0,0,TypeDecl::TBoolean)))
     };
 }
 
@@ -111,11 +108,8 @@ pub enum LustError {
     #[error("unknown error occurred")]
     Unknown,
 }
-
 static NON_LIST_FN: &str = "cannot called on non list";
-
 type Result<T> = std::result::Result<T, LustError>;
-
 #[derive(Debug, Clone, PartialEq)]
 enum TypeDecl {
     TAny,
@@ -125,11 +119,10 @@ enum TypeDecl {
     TBoolean,
     TLambda,
     TList,
-    /// The value is the index of the registered
-    /// user type
+    TListOf(Vec<TypeDecl>),
+    TUnion(Vec<TypeDecl>),
     TUser(usize), 
 }
-
 #[derive(Clone)]
 struct TypeDeclManager {
     user_defined_types: Vec<String>,
@@ -172,6 +165,19 @@ impl TypeDeclManager {
             }
         }
     }
+    fn from_type(&self,typ: Type) -> Result<TypeDecl> {
+        match typ {
+            Type::List(lst,..) => {
+                let mut types = vec![];
+                for t in &lst {
+                    types.push(self.from_type(t.clone())?);
+                }
+                Ok(TypeDecl::TListOf(types))
+            },
+            Type::Symbol(s,..) => Ok(self.from_str(&s)?),
+            _ => Err(internal!(format!("cannot convert {:?} to a TypeDecl",typ))),
+        }
+    }
     fn is_type_keyword(&self, typ: Type) -> bool {
         if sym_matches!(typ,"any_t","i64_t","i_t","f64_t","f_t","str_t","s_t","bool_t","b_t","fn_t","list_t","l_t") {
             return true;
@@ -187,40 +193,25 @@ impl TypeDeclManager {
         false
     }
 }
-#[derive(Debug,Clone)]
-enum ParenStyle {
-    LParen,
-    RParen,
-    LBrace,
-    RBrace,
-    LBracket,
-    RBracket,
-    LCarrot,
-    RCarrot,
-    NotApplicable,
-}
 #[derive(Debug, Clone)]
 struct TypeInfo {
     line: usize,
     column: usize,
     decl: TypeDecl,
-    paren_style: ParenStyle,
 }
 impl TypeInfo {
-    fn new(l: usize, c: usize, d: TypeDecl, pstyle: ParenStyle) -> Self {
-        Self { line: l, column: c, decl: d, paren_style: pstyle }
+    fn new(l: usize, c: usize, d: TypeDecl) -> Self {
+        Self { line: l, column: c, decl: d }
     }
     fn default() -> Self {
-        Self::new(0,0,TypeDecl::TAny,ParenStyle::NotApplicable)
+        Self::new(0,0,TypeDecl::TAny)
     }
 }
-
 #[derive(Debug, Clone)]
 enum Numerical {
     Int64(i64),
     Float64(f64),
 }
-
 #[derive(Debug, Clone)]
 enum Logical {
     True,
@@ -232,13 +223,11 @@ enum Atomic {
     Number(Box<Type>),
     Boolean(Logical, TypeInfo),
 }
-
 #[derive(Debug, Clone)]
 enum Expressable {
     Atom(Box<Type>),
     List(Box<Type>),
 }
-
 #[derive(Debug, Clone)]
 enum Type {
     Symbol(String, TypeInfo),
@@ -249,7 +238,6 @@ enum Type {
     /// Atom, List
     Exp(Expressable),
 }
-
 impl Type {
     fn get_decl_type(&self) -> TypeDecl {
         match self {
@@ -268,7 +256,6 @@ impl Type {
             _ => panic!("wtf"),
        }
     }
-
     fn is_same_type_as(&self,other:Type) -> bool {
        let self_type = self.get_decl_type();
        let other_type = other.get_decl_type();
@@ -277,56 +264,45 @@ impl Type {
     fn is_atom(&self) -> bool {
         matches!(self, Self::Atom(..))
     }
-
     fn is_number(&self) -> bool {
         matches!(self, Self::Atom(Atomic::Number(..))) || matches!(self, Self::Number(..))
     }
-
     fn is_int(&self) -> bool {
         self.is_number() && matches!(self, Self::Number(Numerical::Int64(..), ..))
     }
-
     fn is_float(&self) -> bool {
         self.is_number() && matches!(self, Self::Number(Numerical::Float64(..), ..))
     }
-
     fn is_symbol(&self) -> bool {
         matches!(self, Self::Atom(Atomic::Symbol(..))) || matches!(self, Self::Symbol(..))
     }
-
     fn is_exp(&self) -> bool {
         matches!(self, Self::Exp(..))
     }
-
     fn is_list(&self) -> bool {
         matches!(self, Self::List(..))
     }
-
     fn is_lambda(&self) -> Result<bool> {
         match self {
             Self::List(l,_) => Ok(l[0].clone().matches_string("fn")?),
             _ => Ok(false),
         }
     }
-
     fn is_true(&self) -> Result<bool> {
         if self.is_symbol() && self.clone().as_string()? == "true" {
             return Ok(true);
         }
         Ok(matches!(self, Self::Atom(Atomic::Boolean(Logical::True,..))))
     }
-
     fn is_false(&self) -> Result<bool> {
         if self.is_symbol() && self.clone().as_string()? == "false" {
             return Ok(true);
         }
         Ok(matches!(self, Self::Atom(Atomic::Boolean(Logical::False,..))))
     }
-
     fn is_bool(&self) -> Result<bool> {
         Ok(matches!(self, Self::Atom(Atomic::Boolean(..))))
     }
-
     fn matches_string(&self, s: &str) -> Result<bool> {
         if !self.is_symbol() {
             return Ok(false);
@@ -336,7 +312,6 @@ impl Type {
         }
         Ok(false)
     }
-
     fn as_bool(&self) -> Result<bool> {
         if self.is_bool()? {
             if self.is_true()? {
@@ -348,7 +323,6 @@ impl Type {
             Err(internal!("cannot call as_bool on non boolean symbol"))
         }
     }
-
     fn as_symbol(self) -> Result<Type> {
         match self.clone() {
             Self::Symbol(..) => Ok(self),
@@ -359,7 +333,6 @@ impl Type {
             )),
         }
     }
-
     fn as_number(self) -> Result<Type> {
         match self.clone() {
             Self::Atom(Atomic::Number(n)) => Ok(*n),
@@ -370,28 +343,24 @@ impl Type {
             )),
         }
     }
-
     fn as_string(&self) -> Result<String> {
         match self {
             Self::Symbol(s, _) => Ok(s.to_string()),
             _ => Err(unexpected!("Symbol", format!("{:?} to as_string", self))),
         }
     }
-
     fn as_int(&self) -> Result<i64> {
         match self {
             Self::Number(Numerical::Int64(i), ..) => Ok(*i),
             _ => Err(unexpected!("Number", format!("{:?} to as_int", self))),
         }
     }
-
     fn as_float(&self) -> Result<f64> {
         match self {
             Self::Number(Numerical::Float64(f), ..) => Ok(*f),
             _ => Err(unexpected!("Number", format!("{:?} to as_float", self))),
         }
     }
-
     fn as_atom(&self) -> Result<Type> {
         match self {
             Self::Symbol(..) => Ok(Type::Atom(Atomic::Symbol(self.as_boxed()))),
@@ -403,7 +372,6 @@ impl Type {
             )),
         }
     }
-
     fn as_exp(&self) -> Result<Type> {
         match self {
             Self::Atom(..) => Ok(Self::Exp(Expressable::Atom(self.as_boxed()))),
@@ -414,7 +382,6 @@ impl Type {
             )),
         }
     }
-
     fn as_list(&self) -> Result<Type> {
         match self {
             Self::List(_,..) => Ok(self.clone()),
@@ -422,18 +389,15 @@ impl Type {
             _ => Ok(list!(self.clone())),
         }
     }
-
     fn as_vec(&self) -> Result<Vec<Type>> {
         match self.as_list()? {
             Type::List(l,..) => Ok(l),
             _ => Err(unexpected!("List", format!("{:?}", self))),
         }
     }
-
     fn as_boxed(&self) -> Box<Type> {
         Box::new(self.clone())
     }
-    // car
     fn head(&self) -> Result<Type> {
         if !self.is_list() {
             Err(internal!("cannot call head on a non list"))
@@ -441,7 +405,6 @@ impl Type {
             self.clone().nth_or_err(0)
         }
     }
-    // cdr
     fn tail(&self) -> Result<Type> {
         if !self.is_list() {
             Err(internal!(&format!("{} {}", "head", NON_LIST_FN)))
@@ -455,7 +418,6 @@ impl Type {
             }
         }
     }
-
     fn nth(&self, i: usize) -> Result<Option<Type>> {
         if !self.is_list() {
             return Ok(None);
@@ -470,7 +432,6 @@ impl Type {
             _ => Err(unexpected!("List", format!("{:?}", self))),
         }
     }
-
     fn nth_or_err(&self, i: usize) -> Result<Type> {
         match self.nth(i)? {
             Some(t) => Ok(t),
@@ -478,28 +439,18 @@ impl Type {
         }
     }
 }
-
-/// This trait permits one to extend the language by matching symbols.
-///
-/// If the s-expression has to be in a certain form, or have a certain
-/// number of arguments, or types, you can inspect (shallowly) the structure
-/// in the is_valid function. .can and .is_valid lead to clones.
 trait Handler: DynClone {
     fn can(&self, root: Type) -> Result<bool>;
     fn is_valid(&self, root: Type) -> Result<bool>;
     fn eval(&self, root: Type, env: &mut Environment) -> Result<Type>;
 }
-
-// Yay!
 dyn_clone::clone_trait_object!(Handler);
-
 #[derive(Clone)]
 struct Environment {
     type_manager: TypeDeclManager,
     vars: HashMap<String, Type>,
     handlers: Vec<Box<dyn Handler>>,
 }
-
 impl Environment {
     fn new() -> Self {
         Self {
@@ -508,25 +459,21 @@ impl Environment {
             type_manager: TypeDeclManager::new(),
         }
     }
-
     fn register(&mut self, handler: Box<dyn Handler>) {
         // turns out putting them in a hash table is not trivial
         self.handlers.push(handler);
     }
-
     fn lookup(&self, key: &str) -> Result<Option<Type>> {
         match self.vars.get(key) {
             Some(t) => Ok(Some(t.clone())),
             _ => Ok(None),
         }
     }
-
     fn add(mut self, key: &str, value: Type) -> Self {
         self.vars.insert(key.to_string(), value);
         self
     }
 }
-
 fn tokenize(text: &str) -> Vec<String> {
     text.replace("(", " ( ")
         .replace(")", " ) ")
@@ -537,7 +484,6 @@ fn tokenize(text: &str) -> Vec<String> {
         .map(|s| s.to_string())
         .collect()
 }
-
 fn atomize(token: String) -> Result<Type> {
     match &token.parse::<i64>() {
         Ok(n) => Ok(int!(*n).as_atom()?),
@@ -556,7 +502,6 @@ fn atomize(token: String) -> Result<Type> {
         },
     }
 }
-
 fn is_lparen(s: &str) -> bool {
     let lparens = vec!["(","{","[","<"];
     if lparens.contains(&s) {
@@ -564,7 +509,6 @@ fn is_lparen(s: &str) -> bool {
     }
     false
 }
-
 fn is_rparen(s: &str) -> bool {
     let rparens = vec![")","}","]",">"];
     if rparens.contains(&s) {
@@ -572,14 +516,12 @@ fn is_rparen(s: &str) -> bool {
     }
     false
 }
-
 fn read_from_tokens(tokens: &[String], start: usize) -> Result<(Type, usize)> {
     if tokens.len() == 0 {
         return Err(LustError::Syntax(
             "expected more than 0 tokens!".to_string(),
         ));
     }
-
     let mut i = start;
     if i > tokens.len() {
         return Err(internal!(format!(
@@ -588,7 +530,6 @@ fn read_from_tokens(tokens: &[String], start: usize) -> Result<(Type, usize)> {
             tokens.len()
         )));
     }
-
     if is_lparen(&*tokens[i]) {
         let mut list = vec![];
         i += 1;
@@ -605,17 +546,8 @@ fn read_from_tokens(tokens: &[String], start: usize) -> Result<(Type, usize)> {
         return Ok((atomize(tokens[i].clone())?.as_exp()?, i + 1));
     }
 }
-
 #[derive(Clone)]
-// Do is like progn, it basically helps you execute a series of s-exprs
-// (do (let x (+ 1 2)) (* x x))
-// This is most useful with a lambda
-// (fn (x) 
-//   (do 
-//     (let y (* x x)) 
-//     (+ y 4)))
 struct DoHandler {}
-
 #[derive(Clone)]
 struct LambdaHandler {}
 impl Handler for LambdaHandler {
@@ -626,9 +558,7 @@ impl Handler for LambdaHandler {
             Type::List(lst,..) => match &lst[0] {
                 Type::Symbol(_, _) => {
                     if sym_matches!(h, "fn") {
-                        // In this case it must have 2 arguments, both must be lists
-                        // (fn (a t b t c t) (t) (+ a b c)
-                        if lst.len() != 4 {
+                        if lst.len() != 4 { // (fn (a t b t c t) (t) (+ a b c)
                             Err(
                                 internal!(
                                     "fn expects 3 arguments, a list of arguments, a list of return types, and an executable list"
@@ -672,12 +602,10 @@ impl Handler for LambdaHandler {
             _ => Ok(false),
         }
     }
-
     fn can(&self, root: Type) -> Result<bool> {
         let h = root.as_list()?.head()?;
         Ok(sym_matches!(h, "fn?", "fn", "apply", "applicable?"))
     }
-
     fn eval(&self, root: Type, env: &mut Environment) -> Result<Type> {
         let list = root.clone().as_list()?.as_vec()?;
         let h = root.head()?;
@@ -703,8 +631,7 @@ impl Handler for LambdaHandler {
                 if l.is_list() {
                     if l.is_lambda()? {
                         bool_result = true;
-                    } else {
-                        // must iter handlers
+                    } else { // must iter handlers
                         bool_result = false;
                         for hd in &env.handlers {
                             if hd.can(l.clone())? && hd.is_valid(l.clone())? {
@@ -712,8 +639,7 @@ impl Handler for LambdaHandler {
                             }
                         }
                     }
-                } else if l.is_symbol() {
-                    // must iter handlers
+                } else if l.is_symbol() { // must iter handlers
                     bool_result = false;
                     for hd in &env.handlers {
                         if hd.can(l.clone())? {
@@ -728,15 +654,13 @@ impl Handler for LambdaHandler {
                 Ok(bool_f!())
             }
         } else if sym_matches!(h, "apply") {
-            if list[1].is_symbol() {
-                // (apply + (1 2)
+            if list[1].is_symbol() { // (apply + (1 2)
                 let mut v = vec![list[1].clone()];
                 for el in &list[2].clone().as_vec()? {
                     v.push(el.clone());
                 }
                 return eval(Type::List(v,TypeInfo::default()), env);
-            } else if list[1].is_lambda()? {
-                // (apply (fn (a b) (+ a b)) (1 2))
+            } else if list[1].is_lambda()? { // (apply (fn (a b) (+ a b)) (1 2))
                 let lambda = list[1].clone();
                 let arg_values = list[2].clone();
                 let arg_list = lambda.tail()?.head()?;
@@ -758,19 +682,16 @@ impl Handler for LambdaHandler {
         }
     }
 }
-
 #[derive(Clone)]
 struct OpHandler {}
 impl Handler for OpHandler {
     fn is_valid(&self, _root: Type) -> Result<bool> {
         Ok(true)
     }
-
     fn can(&self, root: Type) -> Result<bool> {
         let h = root.as_list()?.head()?;
         Ok(sym_matches!(h, "lt?", "gt?", "eq?", "and?", "or?", "xor?"))
     }
-
     fn eval(&self, root: Type, env: &mut Environment) -> Result<Type> {
         let list = root.clone().as_list()?.as_vec()?;
         if list.len() < 3 {
@@ -837,14 +758,12 @@ impl Handler for OpHandler {
         }
     }
 }
-
 #[derive(Clone)]
 struct ArithHandler {}
 impl Handler for ArithHandler {
     fn is_valid(&self, _root: Type) -> Result<bool> {
         Ok(true)
     }
-
     fn can(&self, root: Type) -> Result<bool> {
         let h = root.as_list()?.head()?;
         let matches = h.matches_string("+")?
@@ -858,10 +777,8 @@ impl Handler for ArithHandler {
             Ok(true)
         }
     }
-
     fn eval(&self, root: Type, env: &mut Environment) -> Result<Type> {
         let h = root.head()?;
-
         let list = root.clone().as_list()?.as_vec()?;
         if list.len() < 3 {
             return Err(unexpected!(
@@ -936,7 +853,6 @@ impl Handler for IfHandler {
             Ok(false)
         }
     }
-
     fn eval(&self, root: Type, env: &mut Environment) -> Result<Type> {
         let list = root.as_list()?.as_vec()?;
         let pred = eval(list[1].clone(), env)?;
@@ -951,7 +867,6 @@ impl Handler for IfHandler {
         }
     }
 }
-
 fn eval(exp: Type, env: &mut Environment) -> Result<Type> {
     match exp {
         Type::Symbol(ref s, ..) => {
@@ -981,14 +896,12 @@ fn eval(exp: Type, env: &mut Environment) -> Result<Type> {
         _ => Err(internal!(format!("don't know how to eval {:?}", exp))),
     }
 }
-
 fn register_default_handlers(env: &mut Environment) {
     env.register(Box::new(IfHandler {}));
     env.register(Box::new(ArithHandler {}));
     env.register(Box::new(OpHandler {}));
     env.register(Box::new(LambdaHandler {}));
 }
-
 #[cfg(test)]
 mod tests {
     // (let my-fn 
