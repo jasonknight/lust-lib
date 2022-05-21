@@ -155,12 +155,12 @@ impl TypeDeclManager {
     fn from_str(&self,tstr: &str) -> Result<TypeDecl> {
         match tstr {
             "any_t" => Ok(TypeDecl::TAny),
-            "i64_t" => Ok(TypeDecl::TInt64),
-            "f64_t" => Ok(TypeDecl::TFloat64),
-            "str_t" => Ok(TypeDecl::TString),
-            "bool_t" => Ok(TypeDecl::TBoolean),
+            "i64_t" | "i_t" => Ok(TypeDecl::TInt64),
+            "f64_t" | "f_t" => Ok(TypeDecl::TFloat64),
+            "str_t" | "s_t" => Ok(TypeDecl::TString),
+            "bool_t"| "b_t" => Ok(TypeDecl::TBoolean),
             "fn_t" => Ok(TypeDecl::TLambda),
-            "list_t" => Ok(TypeDecl::TList),
+            "list_t" | "l_t" => Ok(TypeDecl::TList),
             _ => {
                 let as_str = tstr.to_string();
                 for (i,user_type) in self.user_defined_types.iter().enumerate() {
@@ -171,6 +171,20 @@ impl TypeDeclManager {
                 Err(internal!(format!("{} is not a defined type",as_str)))
             }
         }
+    }
+    fn is_type_keyword(&self, typ: Type) -> bool {
+        if sym_matches!(typ,"any_t","i64_t","i_t","f64_t","f_t","str_t","s_t","bool_t","b_t","fn_t","list_t","l_t") {
+            return true;
+        }
+        let as_str = typ.as_string();
+        if let Ok(ok_str) = as_str {
+            for (i,user_type) in self.user_defined_types.iter().enumerate() {
+               if ok_str == *user_type {
+                   return true; 
+               }
+            }
+        }
+        false
     }
 }
 #[derive(Debug,Clone)]
@@ -254,6 +268,7 @@ impl Type {
             _ => panic!("wtf"),
        }
     }
+
     fn is_same_type_as(&self,other:Type) -> bool {
        let self_type = self.get_decl_type();
        let other_type = other.get_decl_type();
@@ -612,15 +627,18 @@ impl Handler for LambdaHandler {
                 Type::Symbol(_, _) => {
                     if sym_matches!(h, "fn") {
                         // In this case it must have 2 arguments, both must be lists
-                        // (fn (a b c) (+ a b c)
-                        // (fn (a b c) (do (+ a b c))
-                        if lst.len() != 3 {
-                            Err(internal!("fn expects 2 arguments, a list of arguments and an executable list"))
-                        } else if !lst[1].clone().is_list() && lst[2].clone().is_list() {
-                            println!("4: {:?}", lst.clone());
+                        // (fn (a t b t c t) (t) (+ a b c)
+                        if lst.len() != 4 {
+                            Err(
+                                internal!(
+                                    "fn expects 3 arguments, a list of arguments, a list of return types, and an executable list"
+                                )
+                            )
+                        } else if !lst[1].clone().is_list() && lst[2].clone().is_list() && lst[3].clone().is_list() {
+                            // We check the argument base type
                             Err(internal!(format!(
-                                "the 2 arguments to fn must be lists got {:?} and {:?}",
-                                lst[1], lst[2]
+                                "the 3 arguments to fn must be lists got {:?}, {:?} and {:?}",
+                                lst[1], lst[2], lst[3]
                             )))
                         } else {
                             Ok(true)
@@ -629,7 +647,7 @@ impl Handler for LambdaHandler {
                         for l in &lst[1..] {
                             if !l.is_list() {
                                 return Err(internal!(format!(
-                                    "arguments to fn must be lists, got {:?}",
+                                    "arguments to fn? must be lists, got {:?}",
                                     l
                                 )));
                             }
@@ -689,7 +707,7 @@ impl Handler for LambdaHandler {
                         // must iter handlers
                         bool_result = false;
                         for hd in &env.handlers {
-                            if hd.can(l.clone())? {
+                            if hd.can(l.clone())? && hd.is_valid(l.clone())? {
                                 bool_result = true;
                             }
                         }
@@ -788,8 +806,14 @@ impl Handler for OpHandler {
                     bool_result = bool_result && (left.as_string()? == right.as_string()?);
                 }
             } else if h.matches_string("and?")? {
+                bool_result = true;
                 if left.is_bool()? && right.is_bool()? {
-                    bool_result = bool_result && (left.as_bool()? && right.as_bool()?);
+                    if !(left.as_bool()? && right.as_bool()?) {
+                        bool_result = false; // i.e. short-circuit
+                        break;
+                    }
+                } else {
+                    return Err(internal!(format!("and? can only be used with boolean, got {:?} and {:?}",left,right)));
                 }
             } else if h.matches_string("or?")? {
                 if left.is_bool()? && right.is_bool()? {
@@ -967,8 +991,22 @@ fn register_default_handlers(env: &mut Environment) {
 
 #[cfg(test)]
 mod tests {
-    //(<TInt64,TInt64> fn (a b) <TInt64> (+ a b))
+    // (let my-fn 
+    //   (fn (a i_t b i_t) (i_t) 
+    //     (+ a b)))
     use super::*;
+    #[test]
+    fn test_typedeclmanager_is_type_keyword() -> Result<()> {
+        let mut manager = TypeDeclManager::new();
+        let i = manager.add_str("CustomType");
+        let types = vec!["any_t","i64_t","i_t","f64_t","f_t","str_t","s_t","bool_t","b_t","fn_t","list_t","l_t"];
+        for v in &types {
+            assert!(manager.is_type_keyword(sym!(v)),"v={}", v.clone());
+        }
+        assert!(!manager.is_type_keyword(sym!("any_tt")));
+        assert!(manager.is_type_keyword(sym!("CustomType")));
+        Ok(())
+    }
     #[test]
     fn test_typedeclmanager() -> Result<()> {
         let mut manager = TypeDeclManager::new();
@@ -1070,12 +1108,31 @@ mod tests {
     #[test]
     fn test_lambda_handler_is_valid() -> Result<()> {
         let handler = LambdaHandler {};
-        assert!(list!(sym!("fn")).is_lambda()?);
-        assert!(handler.is_valid(list!(sym!("fn"))).is_err());
-        assert!(handler.is_valid(list!(sym!("fn"), list!(), list!()))?);
+        assert!(list!(sym!("fn")).is_lambda()?,"is_lambda");
+        assert!(handler.is_valid(list!(sym!("fn"))).is_err(),"is_err");
+        assert!(
+            handler.is_valid(
+                list!(
+                    sym!("fn"), 
+                    list!(), // arguments 
+                    list!(), // returns
+                    list!(), // body
+                )
+            )?
+        );
+        assert!(
+            handler.is_valid(
+                list!(
+                    sym!("fn"), 
+                    list!(), // arguments 
+                    //list!(), // returns 
+                    list!(), // body
+                )
+            ).is_err()
+        );
         assert!(handler.is_valid(list!(sym!("fn?"), list!(), list!()))?);
         assert!(handler
-            .is_valid(list!(sym!("fn?"), list!(), sym!("lll")))
+            .is_valid(list!(sym!("fn?"), list!(), list!(), sym!("lll")))
             .is_err());
         assert!(handler
             .is_valid(list!(sym!("apply"), list!(), int!(1)))
