@@ -1,7 +1,6 @@
 use dyn_clone::DynClone;
 use std::collections::HashMap;
 use thiserror::Error;
-use std::str::FromStr;
 
 macro_rules! sym {
     ($s:expr) => {
@@ -84,11 +83,6 @@ macro_rules! internal {
         LustError::Internal($e.to_string())
     };
 }
-macro_rules! syntax {
-    ($e:expr) => {
-        LustError::Syntax($e.to_string())
-    };
-}
 macro_rules! unexpected {
     ($u:expr,$w:expr) => {
         LustError::Unexpected($w.to_string(), $u.to_string())
@@ -151,7 +145,7 @@ impl TypeDeclManager {
         self.user_defined_types.push(utype);
         Ok(self.user_defined_types.len() - 1)
     }
-    fn from_str(&self,tstr: &str) -> Result<TypeDecl> {
+    fn parse_str(&self,tstr: &str) -> Result<TypeDecl> {
         match tstr {
             "any_t" => Ok(TypeDecl::TAny),
             "i64_t" | "i_t" => Ok(TypeDecl::TInt64),
@@ -170,7 +164,7 @@ impl TypeDeclManager {
             }
         }
     }
-    fn from_form(&self,typ: Form) -> Result<TypeDecl> {
+    fn parse_form(&self,typ: Form) -> Result<TypeDecl> {
         match &typ {
             Form::List(lst,..) => {
                 if typ.is_lambda()? {
@@ -180,12 +174,12 @@ impl TypeDeclManager {
                 } else {
                     let mut types = vec![];
                     for t in lst {
-                        types.push(self.from_form(t.clone())?);
+                        types.push(self.parse_form(t.clone())?);
                     }
                     Ok(TypeDecl::TListOf(types))
                 }
             },
-            Form::Symbol(s,..) => Ok(self.from_str(&s)?),
+            Form::Symbol(s,..) => Ok(self.parse_str(s)?),
             _ => Err(internal!(format!("cannot convert {:?} to a TypeDecl",typ))),
         }
     }
@@ -253,7 +247,7 @@ impl Form {
     fn get_type(&self) -> TypeDecl {
         match self {
             Self::Atom(Atomic::Number(ref n)) => {
-               if let Self::Number(_,ref info) = **n {
+               if let Self::Number(_,info) = &**n {
                    info.decl.clone()
                } else {
                     panic!("wtf");
@@ -263,7 +257,7 @@ impl Form {
             Self::List(..) => TypeDecl::TList,
             Self::Symbol(_,info) => info.decl.clone(),
             Self::Exp(Expressable::Atom(a)) => a.get_type(),
-            Self::Exp(Expressable::List(_)) => TypeDecl::TList,
+            Self::Exp(Expressable::List(..)) => TypeDecl::TList,
             _ => panic!("wtf"),
        }
     }
@@ -275,9 +269,9 @@ impl Form {
                 let mut i = 1; // because 0 % 2 == 0
                 for e in lst.as_vec()?.into_iter() {
                     if i % 2 == 0 {
-                        in_types.push(manager.from_form(e)?);
+                        in_types.push(manager.parse_form(e)?);
                     }
-                    i = i + 1;
+                    i += 1;
                 }
                 Ok(TypeDecl::TListOf(in_types))
             },
@@ -290,7 +284,7 @@ impl Form {
                 let mut out_types = vec![];
                 let lst = elements[2].clone();
                 for e in lst.as_vec()?.into_iter() {
-                    out_types.push(manager.from_form(e)?);
+                    out_types.push(manager.parse_form(e)?);
                 }
                 Ok(TypeDecl::TListOf(out_types))
             },
@@ -351,7 +345,7 @@ impl Form {
         if !self.is_symbol() {
             return Ok(false);
         }
-        if self.clone().as_string()? == s.to_string() {
+        if self.clone().as_string()? == s {
             return Ok(true);
         }
         Ok(false)
@@ -367,9 +361,9 @@ impl Form {
             Err(internal!("cannot call as_bool on non boolean symbol"))
         }
     }
-    fn as_symbol(self) -> Result<Form> {
+    fn as_symbol(&self) -> Result<Form> {
         match self.clone() {
-            Self::Symbol(..) => Ok(self),
+            Self::Symbol(..) => Ok(self.clone()),
             Self::Atom(Atomic::Symbol(s)) => Ok(*s),
             _ => Err(LustError::Semantic(
                 format!("{:?}", self),
@@ -377,7 +371,7 @@ impl Form {
             )),
         }
     }
-    fn as_number(self) -> Result<Form> {
+    fn as_number(&self) -> Result<Form> {
         match self.clone() {
             Self::Atom(Atomic::Number(n)) => Ok(*n),
             Self::Number(..) => Ok(self.clone()),
@@ -419,7 +413,7 @@ impl Form {
     fn as_exp(&self) -> Result<Form> {
         match self {
             Self::Atom(..) => Ok(Self::Exp(Expressable::Atom(self.as_boxed()))),
-            Self::List(_,..) => Ok(Self::Exp(Expressable::List(self.as_boxed()))),
+            Self::List(..) => Ok(Self::Exp(Expressable::List(self.as_boxed()))),
             _ => Err(LustError::Semantic(
                 format!("{:?}", self),
                 "become an Expression".to_string(),
@@ -428,7 +422,7 @@ impl Form {
     }
     fn as_list(&self) -> Result<Form> {
         match self {
-            Self::List(_,..) => Ok(self.clone()),
+            Self::List(..) => Ok(self.clone()),
             Self::Exp(Expressable::List(l)) => Ok(*l.clone()),
             _ => Ok(list!(self.clone())),
         }
@@ -455,7 +449,7 @@ impl Form {
         } else {
             match self {
                 Form::List(lst,ti) => Ok(Form::List(
-                    lst[1..].iter().map(|t| t.clone()).collect::<Vec<Form>>(),
+                    lst[1..].to_vec(),
                     ti.clone()
                 )),
                 _ => Err(internal!("Unreachable")),
@@ -519,9 +513,9 @@ impl Environment {
     }
 }
 fn tokenize(text: &str) -> Vec<String> {
-    text.replace("(", " ( ")
-        .replace(")", " ) ")
-        .split(" ")
+    text.replace('(', " ( ")
+        .replace(')', " ) ")
+        .split(' ')
         .into_iter()
         .filter(|s| !s.trim().is_empty())
         .into_iter()
@@ -531,9 +525,9 @@ fn tokenize(text: &str) -> Vec<String> {
 fn atomize(token: String) -> Result<Form> {
     match &token.parse::<i64>() {
         Ok(n) => Ok(int!(*n).as_atom()?),
-        Err(_) => match &token.parse::<f64>() {
+        Err(..) => match &token.parse::<f64>() {
             Ok(f) => Ok(float!(*f).as_atom()?),
-            Err(_) => {
+            Err(..) => {
                 let sym = sym!(token.clone());
                 if sym.is_true()? {
                     Ok(bool_t!())
@@ -561,7 +555,7 @@ fn is_rparen(s: &str) -> bool {
     false
 }
 fn read_from_tokens(tokens: &[String], start: usize) -> Result<(Form, usize)> {
-    if tokens.len() == 0 {
+    if tokens.is_empty() {
         return Err(LustError::Syntax(
             "expected more than 0 tokens!".to_string(),
         ));
@@ -583,11 +577,11 @@ fn read_from_tokens(tokens: &[String], start: usize) -> Result<(Form, usize)> {
             i = i2;
         }
         i += 1;
-        return Ok((Form::List(list,TypeInfo::default()).as_exp()?, i));
+        Ok((Form::List(list,TypeInfo::default()).as_exp()?, i))
     } else if is_rparen(&*tokens[i]) {
-        return Err(unexpected!("anything", ")"));
+        Err(unexpected!("anything", ")"))
     } else {
-        return Ok((atomize(tokens[i].clone())?.as_exp()?, i + 1));
+        Ok((atomize(tokens[i].clone())?.as_exp()?, i + 1))
     }
 }
 #[derive(Clone)]
@@ -597,10 +591,10 @@ struct LambdaHandler {}
 impl Handler for LambdaHandler {
     fn is_valid(&self, root: Form) -> Result<bool> {
         let list_root = root.as_list()?;
-        let h = list_root.clone().head()?;
+        let h = list_root.head()?;
         match &list_root {
             Form::List(lst,..) => match &lst[0] {
-                Form::Symbol(_, _) => {
+                Form::Symbol(..) => {
                     if sym_matches!(h, "fn") {
                         if lst.len() != 4 { // (fn (a t b t c t) (t) (+ a b c)
                             Err(
@@ -651,7 +645,7 @@ impl Handler for LambdaHandler {
         Ok(sym_matches!(h, "fn?", "fn", "apply", "applicable?"))
     }
     fn eval(&self, root: Form, env: &mut Environment) -> Result<Form> {
-        let list = root.clone().as_list()?.as_vec()?;
+        let list = root.as_list()?.as_vec()?;
         let h = root.head()?;
         if sym_matches!(h, "fn") {
             Ok(root.as_list()?)
@@ -703,7 +697,7 @@ impl Handler for LambdaHandler {
                 for el in &list[2].clone().as_vec()? {
                     v.push(el.clone());
                 }
-                return eval(Form::List(v,TypeInfo::default()), env);
+                eval(Form::List(v,TypeInfo::default()), env)
             } else if list[1].is_lambda()? { // (apply (fn (a b) (+ a b)) (1 2))
                 let lambda = list[1].clone();
                 let arg_values = list[2].clone();
@@ -717,7 +711,7 @@ impl Handler for LambdaHandler {
                     local_env = local_env.add(&name, value);
                     i += 1;
                 }
-                return eval(body, &mut local_env);
+                eval(body, &mut local_env)
             } else {
                 Err(internal!("don't know what to do"))
             }
@@ -737,7 +731,7 @@ impl Handler for OpHandler {
         Ok(sym_matches!(h, "lt?", "gt?", "eq?", "and?", "or?", "xor?"))
     }
     fn eval(&self, root: Form, env: &mut Environment) -> Result<Form> {
-        let list = root.clone().as_list()?.as_vec()?;
+        let list = root.as_list()?.as_vec()?;
         if list.len() < 3 {
             return Err(internal!("ops require minimum 2 arguments".to_string()));
         }
@@ -815,7 +809,7 @@ impl Handler for ArithHandler {
             || h.matches_string("*")?
             || h.matches_string("/")?
             || h.matches_string("%")?;
-        if matches == false {
+        if !matches {
             Ok(false)
         } else {
             Ok(true)
@@ -823,7 +817,7 @@ impl Handler for ArithHandler {
     }
     fn eval(&self, root: Form, env: &mut Environment) -> Result<Form> {
         let h = root.head()?;
-        let list = root.clone().as_list()?.as_vec()?;
+        let list = root.as_list()?.as_vec()?;
         if list.len() < 3 {
             return Err(unexpected!(
                 "at least 2 arguments",
@@ -872,7 +866,7 @@ impl Handler for ArithHandler {
 
             i += 1;
         }
-        return Ok(sum);
+        Ok(sum)
     }
 }
 
@@ -927,9 +921,9 @@ fn eval(exp: Form, env: &mut Environment) -> Result<Form> {
         Form::Atom(Atomic::Symbol(..)) => eval(exp.as_symbol()?, env),
         Form::Atom(Atomic::Number(..)) => eval(exp.as_number()?, env),
         Form::Atom(Atomic::Boolean(..)) => Ok(exp),
-        Form::Exp(Expressable::Atom(_)) => eval(exp.as_atom()?, env),
-        Form::Exp(Expressable::List(_)) => eval(exp.as_list()?, env),
-        Form::List(_,..) => {
+        Form::Exp(Expressable::Atom(..)) => eval(exp.as_atom()?, env),
+        Form::Exp(Expressable::List(..)) => eval(exp.as_list()?, env),
+        Form::List(..) => {
             for handler in &env.clone().handlers {
                 if handler.can(exp.clone())? && handler.is_valid(exp.clone())? {
                     return handler.eval(exp, env);
@@ -980,7 +974,7 @@ mod tests {
                 int!(1),
             )
         );
-        let typ = manager.from_form(lambda)?;
+        let typ = manager.parse_form(lambda)?;
         match typ {
             TypeDecl::TLambda(idef,odef) => {
                match *idef {
@@ -1012,7 +1006,7 @@ mod tests {
     fn test_typedeclmanager() -> Result<()> {
         let mut manager = TypeDeclManager::new();
         manager.user_defined_types.push("CustomType".to_string());
-        assert_eq!(manager.from_str("CustomType").unwrap(),TypeDecl::TUser(0));
+        assert_eq!(manager.parse_str("CustomType").unwrap(),TypeDecl::TUser(0));
         let i = manager.add_str("CustomType");
         assert!(i.is_err());
         let i = manager.add_str("CustomType2");
