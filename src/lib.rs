@@ -111,8 +111,10 @@ enum TypeDecl {
     TInt64,
     TFloat64,
     TString,
+    TSymbol,
     TBoolean,
-    TLambda(Box<TypeDecl>,Box<TypeDecl>), // ListOf types in, ListOf types out
+    TLambda, // Generic lambda
+    TLambdaOf(Box<TypeDecl>,Box<TypeDecl>), // ListOf types in, ListOf types out
     TList,
     TListOf(Vec<TypeDecl>),
     TUnion(Vec<TypeDecl>),
@@ -121,6 +123,64 @@ enum TypeDecl {
 impl TypeDecl {
     fn as_boxed(&self) -> Box<TypeDecl> {
         Box::new(self.clone())
+    }
+    fn same_as(&self, other: &Self) -> bool {
+        let l = self.to_ord();
+        let r = other.to_ord();
+        let count = l.iter().zip(&r).filter(|&(a,b)| a == b).count(); 
+        count == l.len() && count == r.len()
+    }
+    fn similar_to(&self, other: &Self) -> bool {
+        let mut l = self.to_ord();
+        let mut r = self.to_ord();
+        l.sort();
+        r.sort();
+        l == r
+    }
+    fn to_ord(&self) -> Vec<usize> { // compare types
+        match self {
+            Self::TUndeclared => vec![0],
+            Self::TAny => vec![1],
+            Self::TInt64 => vec![2],
+            Self::TFloat64 => vec![3],
+            Self::TString => vec![4],
+            Self::TSymbol => vec![5],
+            Self::TBoolean => vec![6],
+            Self::TLambda => vec![7],
+            Self::TLambdaOf(left,right) => {
+                let mut v:Vec<usize> = vec![8];
+                let left_v = left.clone().to_ord();
+                let right_v = right.clone().to_ord();
+                for i in &left_v {
+                    v.push(*i);
+                }
+                for i in &right_v {
+                    v.push(*i);
+                }
+                v
+            },
+            Self::TList => vec![9],
+            Self::TListOf(lst) => {
+                let mut v:Vec<usize> = vec![10];
+                for i in lst {
+                    for j in &i.to_ord() {
+                        v.push(*j);
+                    }
+                }
+                v
+            },
+            Self::TUnion(lst) => {
+                let mut v:Vec<usize> = vec![11];
+                for i in lst {
+                    for j in &i.to_ord() {
+                        v.push(*j);
+                    }
+                }
+                v.sort(); // because union order doesn't matter
+                v
+            },
+            Self::TUser(i) => vec![ i + 12],
+        }
     }
 }
 #[derive(Clone)]
@@ -170,7 +230,7 @@ impl TypeDeclManager {
                 if typ.is_lambda()? {
                    let in_def = typ.get_param_types(self)?;
                    let out_def = typ.get_result_types(self)?;
-                   Ok(TypeDecl::TLambda(in_def.as_boxed(),out_def.as_boxed()))
+                   Ok(TypeDecl::TLambdaOf(in_def.as_boxed(),out_def.as_boxed()))
                 } else {
                     let mut types = vec![];
                     for t in lst {
@@ -478,9 +538,12 @@ impl Form {
     }
 }
 trait Handler: DynClone {
+    fn get_param_types(&self,root: Form, manager: &TypeDeclManager) -> Result<TypeDecl>;
     fn can(&self, root: Form) -> Result<bool>;
-    fn is_valid(&self, root: Form) -> Result<bool>;
+    fn is_valid(&self, root: Form, manager: &TypeDeclManager) -> Result<bool>;
     fn eval(&self, root: Form, env: &mut Environment) -> Result<Form>;
+    //fn get_param_types(&self, root: Form, env: &mut Environment) -> Result<bool>;
+    //fn get_result_types(&self, root: Form, env: &mut Environment) -> Result<bool>;
 }
 dyn_clone::clone_trait_object!(Handler);
 #[derive(Clone)]
@@ -589,7 +652,22 @@ struct DoHandler {}
 #[derive(Clone)]
 struct LambdaHandler {}
 impl Handler for LambdaHandler {
-    fn is_valid(&self, root: Form) -> Result<bool> {
+    fn get_param_types(&self, root: Form, manager: &TypeDeclManager) -> Result<TypeDecl> {
+        let list_root = root.as_list()?;
+        let h = list_root.head()?;
+        if sym_matches!(h, "fn") {
+            Ok(TypeDecl::TListOf(vec![TypeDecl::TList,TypeDecl::TList,TypeDecl::TList]))
+        } else if sym_matches!(h, "fn?") {
+            Ok(TypeDecl::TUnion(vec![TypeDecl::TList,TypeDecl::TSymbol]))
+        } else if sym_matches!(h, "applicable?") {
+            Ok(TypeDecl::TList)
+        } else if sym_matches!(h, "apply") {
+            Ok(TypeDecl::TListOf(vec![TypeDecl::TUnion(vec![TypeDecl::TSymbol,TypeDecl::TLambda]),TypeDecl::TList]))
+        } else {
+            Err(internal!("cannot determine param types"))
+        }
+    }
+    fn is_valid(&self, root: Form, manager: &TypeDeclManager) -> Result<bool> {
         let list_root = root.as_list()?;
         let h = list_root.head()?;
         match &list_root {
@@ -672,7 +750,7 @@ impl Handler for LambdaHandler {
                     } else { // must iter handlers
                         bool_result = false;
                         for hd in &env.handlers {
-                            if hd.can(l.clone())? && hd.is_valid(l.clone())? {
+                            if hd.can(l.clone())? && hd.is_valid(l.clone(),&env.type_manager)? {
                                 bool_result = true;
                             }
                         }
@@ -723,7 +801,10 @@ impl Handler for LambdaHandler {
 #[derive(Clone)]
 struct OpHandler {}
 impl Handler for OpHandler {
-    fn is_valid(&self, _root: Form) -> Result<bool> {
+    fn get_param_types(&self, root: Form, manager: &TypeDeclManager) -> Result<TypeDecl> {
+        Ok(TypeDecl::TAny)
+    }
+    fn is_valid(&self, _root: Form, _manager: &TypeDeclManager) -> Result<bool> {
         Ok(true)
     }
     fn can(&self, root: Form) -> Result<bool> {
@@ -799,7 +880,10 @@ impl Handler for OpHandler {
 #[derive(Clone)]
 struct ArithHandler {}
 impl Handler for ArithHandler {
-    fn is_valid(&self, _root: Form) -> Result<bool> {
+    fn get_param_types(&self, root: Form, manager: &TypeDeclManager) -> Result<TypeDecl> {
+        Ok(TypeDecl::TAny)
+    }
+    fn is_valid(&self, _root: Form, _manager: &TypeDeclManager) -> Result<bool> {
         Ok(true)
     }
     fn can(&self, root: Form) -> Result<bool> {
@@ -873,7 +957,10 @@ impl Handler for ArithHandler {
 #[derive(Clone)]
 struct IfHandler {}
 impl Handler for IfHandler {
-    fn is_valid(&self, root: Form) -> Result<bool> {
+    fn get_param_types(&self, root: Form, manager: &TypeDeclManager) -> Result<TypeDecl> {
+        Ok(TypeDecl::TAny)
+    }
+    fn is_valid(&self, root: Form, _manager: &TypeDeclManager) -> Result<bool> {
         let list = root.as_list()?.as_vec()?;
         if list.len() != 4 {
             return Err(LustError::Semantic(
@@ -925,7 +1012,7 @@ fn eval(exp: Form, env: &mut Environment) -> Result<Form> {
         Form::Exp(Expressable::List(..)) => eval(exp.as_list()?, env),
         Form::List(..) => {
             for handler in &env.clone().handlers {
-                if handler.can(exp.clone())? && handler.is_valid(exp.clone())? {
+                if handler.can(exp.clone())? && handler.is_valid(exp.clone(), &env.type_manager)? {
                     return handler.eval(exp, env);
                 }
             }
@@ -954,6 +1041,29 @@ mod tests {
 // * Implement file handling
     use super::*;
     #[test]
+    fn test_typedecl_comparison_lambda() -> Result<()> {
+        let t1 = TypeDecl::TUnion(vec![TypeDecl::TInt64, TypeDecl::TUser(33)]);
+        let t2 = TypeDecl::TUnion(vec![TypeDecl::TUser(33),TypeDecl::TInt64]);
+        let t3 = TypeDecl::TListOf(vec![TypeDecl::TSymbol,TypeDecl::TString]);
+        let l1 = TypeDecl::TLambdaOf(t1.as_boxed(),t2.as_boxed());
+        let l2 = TypeDecl::TLambdaOf(t1.as_boxed(),t3.as_boxed());
+        let l3 = TypeDecl::TLambdaOf(t1.as_boxed(),t2.as_boxed());
+        assert!(!l1.same_as(&l2));
+        assert!(l3.same_as(&l1));
+        Ok(())
+    }
+    #[test]
+    fn test_typedecl_comparison() -> Result<()> {
+        let t1 = TypeDecl::TUnion(vec![TypeDecl::TInt64, TypeDecl::TUser(33)]);
+        let t2 = TypeDecl::TUnion(vec![TypeDecl::TUser(33),TypeDecl::TInt64]);
+        let t3 = TypeDecl::TListOf(vec![TypeDecl::TSymbol,TypeDecl::TString]);
+        let t4 = TypeDecl::TListOf(vec![TypeDecl::TString, TypeDecl::TSymbol]);
+        assert!(t1.same_as(&t2));
+        assert!(!t3.same_as(&t4), "same_as {:?} == {:?}", t3.to_ord(),t4.to_ord());
+        assert!(t3.similar_to(&t4));
+        Ok(())
+    }
+    #[test]
     fn test_form_get_param_types() -> Result<()> {
         let mut manager = TypeDeclManager::new();
         let i = manager.add_str("CustomType");
@@ -976,7 +1086,7 @@ mod tests {
         );
         let typ = manager.parse_form(lambda)?;
         match typ {
-            TypeDecl::TLambda(idef,odef) => {
+            TypeDecl::TLambdaOf(idef,odef) => {
                match *idef {
                     TypeDecl::TListOf(v) => assert_eq!(v, vec![TypeDecl::TInt64,TypeDecl::TUser(0)],"in def is wrong vec"),
                     _ => unreachable!("in def is wrong"),
@@ -1102,9 +1212,10 @@ mod tests {
     }
     #[test]
     fn test_lambda_handler_is_valid() -> Result<()> {
+        let mut env = Environment::new();
         let handler = LambdaHandler {};
         assert!(list!(sym!("fn")).is_lambda()?,"is_lambda");
-        assert!(handler.is_valid(list!(sym!("fn"))).is_err(),"is_err");
+        assert!(handler.is_valid(list!(sym!("fn")), &env.type_manager).is_err(),"is_err");
         assert!(
             handler.is_valid(
                 list!(
@@ -1112,7 +1223,8 @@ mod tests {
                     list!(), // arguments 
                     list!(), // returns
                     list!(), // body
-                )
+                ),
+                &env.type_manager
             )?
         );
         assert!(
@@ -1122,17 +1234,18 @@ mod tests {
                     list!(), // arguments 
                     //list!(), // returns 
                     list!(), // body
-                )
+                ),
+                &env.type_manager
             ).is_err()
         );
-        assert!(handler.is_valid(list!(sym!("fn?"), list!(), list!()))?);
+        assert!(handler.is_valid(list!(sym!("fn?"), list!(), list!()), &env.type_manager)?);
         assert!(handler
-            .is_valid(list!(sym!("fn?"), list!(), list!(), sym!("lll")))
+            .is_valid(list!(sym!("fn?"), list!(), list!(), sym!("lll")), &env.type_manager)
             .is_err());
         assert!(handler
-            .is_valid(list!(sym!("apply"), list!(), int!(1)))
+            .is_valid(list!(sym!("apply"), list!(), int!(1)), &env.type_manager)
             .is_err());
-        assert!(handler.is_valid(list!(sym!("apply"), list!(), list!()))?);
+        assert!(handler.is_valid(list!(sym!("apply"), list!(), list!()), &env.type_manager)?);
         Ok(())
     }
 
