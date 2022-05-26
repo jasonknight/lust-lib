@@ -1,7 +1,8 @@
 use dyn_clone::DynClone;
 use std::collections::HashMap;
 use thiserror::Error;
-
+mod peloteurs;
+#[macro_export]
 macro_rules! sym {
     ($s:expr) => {
         Form::Symbol($s.to_string(), TypeInfo::new(0,0,TypeDecl::TString))
@@ -17,7 +18,7 @@ macro_rules! sym {
         )
     };
 }
-
+#[macro_export]
 macro_rules! int {
     ($i:expr) => {
         Form::Number(Numerical::Int64($i), TypeInfo::new(0, 0, TypeDecl::TInt64))
@@ -33,7 +34,7 @@ macro_rules! int {
         )
     };
 }
-
+#[macro_export]
 macro_rules! float {
     ($i:expr) => {
         Form::Number(Numerical::Float64($i), TypeInfo::new(0,0,TypeDecl::TFloat64))
@@ -49,19 +50,19 @@ macro_rules! float {
         )
     };
 }
-
+#[macro_export]
 macro_rules! bool_t {
     () => {
         Form::Atom(Atomic::Boolean(Logical::True, TypeInfo::new(0,0,TypeDecl::TBoolean)))
     };
 }
-
+#[macro_export]
 macro_rules! bool_f {
     () => {
         Form::Atom(Atomic::Boolean(Logical::False, TypeInfo::new(0,0,TypeDecl::TBoolean)))
     };
 }
-
+#[macro_export]
 macro_rules! list {
     () => (
         Form::List(Vec::new(),TypeInfo::default())
@@ -70,19 +71,19 @@ macro_rules! list {
         Form::List(vec![$($x),+],TypeInfo::default())
     );
 }
-
+#[macro_export]
 macro_rules! sym_matches {
     ($h:expr, $($x:expr),+ $(,)?) => (
         vec![$($x),+].iter().fold(false, |r,c| r || $h.matches_string(c).unwrap_or(false) )
     );
 }
-
-/// Error Macros
+#[macro_export]
 macro_rules! internal {
     ($e:expr) => {
         LustError::Internal($e.to_string())
     };
 }
+#[macro_export]
 macro_rules! unexpected {
     ($u:expr,$w:expr) => {
         LustError::Unexpected($w.to_string(), $u.to_string())
@@ -537,7 +538,7 @@ impl Form {
         }
     }
 }
-trait Handler: DynClone {
+trait Peloteur: DynClone {
     fn get_param_types(&self,root: Form, manager: &TypeDeclManager) -> Result<TypeDecl>;
     fn can(&self, root: Form) -> Result<bool>;
     fn is_valid(&self, root: Form, manager: &TypeDeclManager) -> Result<bool>;
@@ -545,24 +546,24 @@ trait Handler: DynClone {
     //fn get_param_types(&self, root: Form, env: &mut Environment) -> Result<bool>;
     //fn get_result_types(&self, root: Form, env: &mut Environment) -> Result<bool>;
 }
-dyn_clone::clone_trait_object!(Handler);
+dyn_clone::clone_trait_object!(Peloteur);
 #[derive(Clone)]
 struct Environment {
     type_manager: TypeDeclManager,
     vars: HashMap<String, Form>,
-    handlers: Vec<Box<dyn Handler>>,
+    peloteurs: Vec<Box<dyn Peloteur>>,
 }
 impl Environment {
     fn new() -> Self {
         Self {
             vars: HashMap::new(),
-            handlers: vec![],
+            peloteurs: vec![],
             type_manager: TypeDeclManager::new(),
         }
     }
-    fn register(&mut self, handler: Box<dyn Handler>) {
+    fn register(&mut self, peloteur: Box<dyn Peloteur>) {
         // turns out putting them in a hash table is not trivial
-        self.handlers.push(handler);
+        self.peloteurs.push(peloteur);
     }
     fn lookup(&self, key: &str) -> Result<Option<Form>> {
         match self.vars.get(key) {
@@ -648,350 +649,7 @@ fn read_from_tokens(tokens: &[String], start: usize) -> Result<(Form, usize)> {
     }
 }
 #[derive(Clone)]
-struct DoHandler {}
-#[derive(Clone)]
-struct LambdaHandler {}
-impl Handler for LambdaHandler {
-    fn get_param_types(&self, root: Form, manager: &TypeDeclManager) -> Result<TypeDecl> {
-        let list_root = root.as_list()?;
-        let h = list_root.head()?;
-        if sym_matches!(h, "fn") {
-            Ok(TypeDecl::TListOf(vec![TypeDecl::TList,TypeDecl::TList,TypeDecl::TList]))
-        } else if sym_matches!(h, "fn?") {
-            Ok(TypeDecl::TUnion(vec![TypeDecl::TList,TypeDecl::TSymbol]))
-        } else if sym_matches!(h, "applicable?") {
-            Ok(TypeDecl::TList)
-        } else if sym_matches!(h, "apply") {
-            Ok(TypeDecl::TListOf(vec![TypeDecl::TUnion(vec![TypeDecl::TSymbol,TypeDecl::TLambda]),TypeDecl::TList]))
-        } else {
-            Err(internal!("cannot determine param types"))
-        }
-    }
-    fn is_valid(&self, root: Form, manager: &TypeDeclManager) -> Result<bool> {
-        let list_root = root.as_list()?;
-        let h = list_root.head()?;
-        match &list_root {
-            Form::List(lst,..) => match &lst[0] {
-                Form::Symbol(..) => {
-                    if sym_matches!(h, "fn") {
-                        if lst.len() != 4 { // (fn (a t b t c t) (t) (+ a b c)
-                            Err(
-                                internal!(
-                                    "fn expects 3 arguments, a list of arguments, a list of return types, and an executable list"
-                                )
-                            )
-                        } else if !lst[1].clone().is_list() && lst[2].clone().is_list() && lst[3].clone().is_list() {
-                            // We check the argument base type
-                            Err(internal!(format!(
-                                "the 3 arguments to fn must be lists got {:?}, {:?} and {:?}",
-                                lst[1], lst[2], lst[3]
-                            )))
-                        } else {
-                            Ok(true)
-                        }
-                    } else if sym_matches!(h, "fn?") {
-                        for l in &lst[1..] {
-                            if !l.is_list() {
-                                return Err(internal!(format!(
-                                    "arguments to fn? must be lists, got {:?}",
-                                    l
-                                )));
-                            }
-                        }
-                        Ok(true)
-                    } else if sym_matches!(h, "apply", "applicable?") {
-                        for l in &lst[1..] {
-                            if !l.is_list() && !l.is_symbol() {
-                                return Err(internal!(format!(
-                                    "arguments to apply must be lists or symbols, got {:?}",
-                                    l
-                                )));
-                            }
-                        }
-                        Ok(true)
-                    } else {
-                        Ok(true)
-                    }
-                }
-                _ => Ok(false),
-            },
-            _ => Ok(false),
-        }
-    }
-    fn can(&self, root: Form) -> Result<bool> {
-        let h = root.as_list()?.head()?;
-        Ok(sym_matches!(h, "fn?", "fn", "apply", "applicable?"))
-    }
-    fn eval(&self, root: Form, env: &mut Environment) -> Result<Form> {
-        let list = root.as_list()?.as_vec()?;
-        let h = root.head()?;
-        if sym_matches!(h, "fn") {
-            Ok(root.as_list()?)
-        } else if sym_matches!(h, "fn?") {
-            let mut bool_result = true;
-            for l in &list[1..] {
-                if !l.is_lambda()? {
-                    bool_result = false;
-                    break;
-                }
-            }
-            if bool_result {
-                Ok(bool_t!())
-            } else {
-                Ok(bool_f!())
-            }
-        } else if sym_matches!(h, "applicable?") {
-            let mut bool_result = true;
-            for l in &list[1..] {
-                bool_result = false;
-                if l.is_list() {
-                    if l.is_lambda()? {
-                        bool_result = true;
-                    } else { // must iter handlers
-                        bool_result = false;
-                        for hd in &env.handlers {
-                            if hd.can(l.clone())? && hd.is_valid(l.clone(),&env.type_manager)? {
-                                bool_result = true;
-                            }
-                        }
-                    }
-                } else if l.is_symbol() { // must iter handlers
-                    bool_result = false;
-                    for hd in &env.handlers {
-                        if hd.can(l.clone())? {
-                            bool_result = true;
-                        }
-                    }
-                }
-            }
-            if bool_result {
-                Ok(bool_t!())
-            } else {
-                Ok(bool_f!())
-            }
-        } else if sym_matches!(h, "apply") {
-            if list[1].is_symbol() { // (apply + (1 2)
-                let mut v = vec![list[1].clone()];
-                for el in &list[2].clone().as_vec()? {
-                    v.push(el.clone());
-                }
-                eval(Form::List(v,TypeInfo::default()), env)
-            } else if list[1].is_lambda()? { // (apply (fn (a b) (+ a b)) (1 2))
-                let lambda = list[1].clone();
-                let arg_values = list[2].clone();
-                let arg_list = lambda.tail()?.head()?;
-                let body = lambda.tail()?.tail()?.head()?;
-                let mut local_env = env.clone();
-                let mut i = 0;
-                for sym in &arg_list.as_vec()? {
-                    let name = sym.clone().as_string()?;
-                    let value = eval(arg_values.nth_or_err(i)?, env)?;
-                    local_env = local_env.add(&name, value);
-                    i += 1;
-                }
-                eval(body, &mut local_env)
-            } else {
-                Err(internal!("don't know what to do"))
-            }
-        } else {
-            Err(internal!("something"))
-        }
-    }
-}
-#[derive(Clone)]
-struct OpHandler {}
-impl Handler for OpHandler {
-    fn get_param_types(&self, root: Form, manager: &TypeDeclManager) -> Result<TypeDecl> {
-        Ok(TypeDecl::TAny)
-    }
-    fn is_valid(&self, _root: Form, _manager: &TypeDeclManager) -> Result<bool> {
-        Ok(true)
-    }
-    fn can(&self, root: Form) -> Result<bool> {
-        let h = root.as_list()?.head()?;
-        Ok(sym_matches!(h, "lt?", "gt?", "eq?", "and?", "or?", "xor?"))
-    }
-    fn eval(&self, root: Form, env: &mut Environment) -> Result<Form> {
-        let list = root.as_list()?.as_vec()?;
-        if list.len() < 3 {
-            return Err(internal!("ops require minimum 2 arguments".to_string()));
-        }
-        let h = root.head()?;
-        let mut i = 2;
-        let mut bool_result = true;
-        // This could be made faster with in comparison
-        while i < list.len() {
-            let left = eval(list[i - 1].clone(), env)?;
-            //let cleft = left.clone();
-            let right = eval(list[i].clone(), env)?;
-            //let cright = right.clone();
-            if h.matches_string("lt?")? {
-                if left.is_int() {
-                    bool_result = bool_result && (left.as_int()? < right.as_int()?);
-                } else if left.is_float() {
-                    bool_result = bool_result && (left.as_float()? < right.as_float()?);
-                }
-            } else if h.matches_string("gt?")? {
-                if left.is_int() {
-                    bool_result = bool_result && (left.as_int()? > right.as_int()?);
-                } else if left.is_float() {
-                    bool_result = bool_result && (left.as_float()? > right.as_float()?);
-                }
-            } else if h.matches_string("eq?")? {
-                if left.is_int() {
-                    bool_result = bool_result && (left.as_int()? == right.as_int()?);
-                } else if left.is_float() {
-                    bool_result = bool_result && (left.as_float()? == right.as_float()?);
-                } else if left.is_symbol() {
-                    bool_result = bool_result && (left.as_string()? == right.as_string()?);
-                }
-            } else if h.matches_string("and?")? {
-                bool_result = true;
-                if left.is_bool()? && right.is_bool()? {
-                    if !(left.as_bool()? && right.as_bool()?) {
-                        bool_result = false; // i.e. short-circuit
-                        break;
-                    }
-                } else {
-                    return Err(internal!(format!("and? can only be used with boolean, got {:?} and {:?}",left,right)));
-                }
-            } else if h.matches_string("or?")? {
-                if left.is_bool()? && right.is_bool()? {
-                    bool_result = bool_result && (left.as_bool()? || right.as_bool()?);
-                }
-            } else if h.matches_string("xor?")? && left.is_bool()? && right.is_bool()? {
-                if (left.is_true()? && right.is_true()?)
-                    || (left.is_false()? && right.is_false()?)
-                {
-                    bool_result = false;
-                } else if left.as_bool()? || right.as_bool()? {
-                    bool_result = true;
-                }
-            }
-            i += 1;
-        }
-        if bool_result {
-            Ok(bool_t!())
-        } else {
-            Ok(bool_f!())
-        }
-    }
-}
-#[derive(Clone)]
-struct ArithHandler {}
-impl Handler for ArithHandler {
-    fn get_param_types(&self, root: Form, manager: &TypeDeclManager) -> Result<TypeDecl> {
-        Ok(TypeDecl::TAny)
-    }
-    fn is_valid(&self, _root: Form, _manager: &TypeDeclManager) -> Result<bool> {
-        Ok(true)
-    }
-    fn can(&self, root: Form) -> Result<bool> {
-        let h = root.as_list()?.head()?;
-        let matches = h.matches_string("+")?
-            || h.matches_string("-")?
-            || h.matches_string("*")?
-            || h.matches_string("/")?
-            || h.matches_string("%")?;
-        if !matches {
-            Ok(false)
-        } else {
-            Ok(true)
-        }
-    }
-    fn eval(&self, root: Form, env: &mut Environment) -> Result<Form> {
-        let h = root.head()?;
-        let list = root.as_list()?.as_vec()?;
-        if list.len() < 3 {
-            return Err(unexpected!(
-                "at least 2 arguments",
-                format!("{}", list.len() - 1)
-            ));
-        }
-        let nth = root.nth_or_err(1)?;
-        let mut sum = eval(nth, env)?.as_number()?;
-        let mut i = 2;
-        while i < list.len() {
-            let cur = eval(root.nth_or_err(i)?, env)?;
-
-            if sum.is_int() {
-                if h.matches_string("+")? {
-                    sum = int!(sum.as_int()? + cur.as_int()?);
-                } else if h.matches_string("-")? {
-                    sum = int!(sum.as_int()? - cur.as_int()?);
-                } else if h.matches_string("*")? {
-                    sum = int!(sum.as_int()? * cur.as_int()?);
-                } else if h.matches_string("/")? {
-                    let tmp = cur.as_int()?;
-                    if tmp == 0 {
-                        return Err(internal!("division by 0"));
-                    }
-                    sum = int!(sum.as_int()? / tmp);
-                } else if h.matches_string("%")? {
-                    sum = int!(sum.as_int()? % cur.as_int()?);
-                }
-            } else if sum.is_float() {
-                if h.matches_string("+")? {
-                    sum = float!(sum.as_float()? + cur.as_float()?);
-                } else if h.matches_string("-")? {
-                    sum = float!(sum.as_float()? - cur.as_float()?);
-                } else if h.matches_string("*")? {
-                    sum = float!(sum.as_float()? * cur.as_float()?);
-                } else if h.matches_string("/")? {
-                    let tmp = cur.as_float()?;
-                    if tmp == 0.0 {
-                        return Err(internal!("division by 0"));
-                    }
-                    sum = float!(sum.as_float()? / tmp);
-                } else if h.matches_string("%")? {
-                    sum = float!(sum.as_float()? % cur.as_float()?);
-                }
-            }
-
-            i += 1;
-        }
-        Ok(sum)
-    }
-}
-
-#[derive(Clone)]
-struct IfHandler {}
-impl Handler for IfHandler {
-    fn get_param_types(&self, root: Form, manager: &TypeDeclManager) -> Result<TypeDecl> {
-        Ok(TypeDecl::TAny)
-    }
-    fn is_valid(&self, root: Form, _manager: &TypeDeclManager) -> Result<bool> {
-        let list = root.as_list()?.as_vec()?;
-        if list.len() != 4 {
-            return Err(LustError::Semantic(
-                "if".to_string(),
-                "be called with > 3 arguments, predicate, consequent and alternative".to_string(),
-            ));
-        }
-        Ok(true)
-    }
-    fn can(&self, root: Form) -> Result<bool> {
-        let h = root.as_list()?.head()?;
-        if sym_matches!(h, "if") {
-            Ok(true)
-        } else {
-            Ok(false)
-        }
-    }
-    fn eval(&self, root: Form, env: &mut Environment) -> Result<Form> {
-        let list = root.as_list()?.as_vec()?;
-        let pred = eval(list[1].clone(), env)?;
-        if pred.is_true()? {
-            eval(list[2].clone(), env)
-        } else if pred.is_false()? {
-            eval(list[3].clone(), env)
-        } else {
-            Err(LustError::Syntax(
-                "a predicate can only reduce to true or false".to_string(),
-            ))
-        }
-    }
-}
+struct DoPeloteur {}
 fn eval(exp: Form, env: &mut Environment) -> Result<Form> {
     match exp {
         Form::Symbol(ref s, ..) => {
@@ -1011,9 +669,9 @@ fn eval(exp: Form, env: &mut Environment) -> Result<Form> {
         Form::Exp(Expressable::Atom(..)) => eval(exp.as_atom()?, env),
         Form::Exp(Expressable::List(..)) => eval(exp.as_list()?, env),
         Form::List(..) => {
-            for handler in &env.clone().handlers {
-                if handler.can(exp.clone())? && handler.is_valid(exp.clone(), &env.type_manager)? {
-                    return handler.eval(exp, env);
+            for peloteur in &env.clone().peloteurs {
+                if peloteur.can(exp.clone())? && peloteur.is_valid(exp.clone(), &env.type_manager)? {
+                    return peloteur.eval(exp, env);
                 }
             }
             Err(internal!(format!("don't know how to eval {:?}", exp)))
@@ -1021,11 +679,11 @@ fn eval(exp: Form, env: &mut Environment) -> Result<Form> {
         _ => Err(internal!(format!("don't know how to eval {:?}", exp))),
     }
 }
-fn register_default_handlers(env: &mut Environment) {
-    env.register(Box::new(IfHandler {}));
-    env.register(Box::new(ArithHandler {}));
-    env.register(Box::new(OpHandler {}));
-    env.register(Box::new(LambdaHandler {}));
+fn register_default_peloteurs(env: &mut Environment) {
+    env.register(Box::new(peloteurs::conditionals::If {}));
+    env.register(Box::new(peloteurs::math::Math {}));
+    env.register(Box::new(peloteurs::logic::Logic {}));
+    env.register(Box::new(peloteurs::lambda::Lambda {}));
 }
 #[cfg(test)]
 mod tests {
@@ -1035,7 +693,7 @@ mod tests {
 // * Implement Filter
 // * Implement Fold
 // * Implement Zip
-// * Handlers need a method to indicate their return types based on the type passed in
+// * Peloteurs need a method to indicate their return types based on the type passed in
 // * Implement type system checking
 // * Implement abs, min, and max
 // * Implement file handling
@@ -1133,448 +791,16 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn test_lambda_handler_eval_apply_lambda() -> Result<()> {
-        let mut env = Environment::new();
-        register_default_handlers(&mut env);
-        let handler = LambdaHandler {};
-        let lambda = list!(
-            sym!("fn"),
-            list!(sym!("x"), sym!("y"),),
-            list!(sym!("+"), sym!("x"), sym!("y"), int!(1),)
-        );
-        let apply = list!(sym!("apply"), lambda.clone(), list!(int!(1), int!(2)),);
-        assert_eq!(handler.eval(apply, &mut env)?.as_int()?, 4);
-        Ok(())
-    }
-
-    #[test]
-    fn test_lambda_handler_eval_apply_symbol() -> Result<()> {
-        let mut env = Environment::new();
-        register_default_handlers(&mut env);
-        let handler = LambdaHandler {};
-        let apply = list!(sym!("apply"), sym!("+"), list!(int!(1), int!(2)),);
-        assert_eq!(handler.eval(apply, &mut env)?.as_int()?, 3);
-        Ok(())
-    }
-
-    #[test]
-    fn test_lambda_handler_eval_lambda() -> Result<()> {
-        let mut env = Environment::new();
-        register_default_handlers(&mut env);
-        let handler = LambdaHandler {};
-        let lambda = list!(sym!("fn"), list!(), list!(sym!("+"), int!(1), int!(2)));
-        assert!(handler.eval(lambda.clone(), &mut env)?.is_lambda()?);
-
-        Ok(())
-    }
-    #[test]
-    fn test_lambda_handler_eval_lambdap() -> Result<()> {
-        let mut env = Environment::new();
-        register_default_handlers(&mut env);
-        // A lambda just returns a lambda
-        let handler = LambdaHandler {};
-        let lambda = list!(sym!("fn"), list!(), list!());
-        let lambdap = list!(sym!("fn?"), lambda.clone(), lambda.clone(),);
-
-        assert!(handler.eval(lambdap, &mut env)?.is_true()?);
-
-        let lambdap_false = list!(sym!("fn?"), lambda.clone(), bool_t!(),);
-
-        assert!(handler.eval(lambdap_false, &mut env)?.is_false()?);
-
-        Ok(())
-    }
-    #[test]
-    fn test_lambda_handler_eval_applicable() -> Result<()> {
-        let mut env = Environment::new();
-        register_default_handlers(&mut env);
-        // A lambda just returns a lambda
-        let handler = LambdaHandler {};
-        let lambda = list!(sym!("fn"), list!(), list!());
-        let applyp = list!(
-            sym!("applicable?"),
-            lambda.clone(),
-            list!(sym!("+"), int!(1), int!(2)),
-            sym!("+"),
-        );
-
-        assert!(handler.eval(applyp, &mut env)?.is_true()?);
-
-        let applyp_false = list!(
-            sym!("applicable?"),
-            list!(sym!("+"), int!(1), int!(2)),
-            int!(1),
-        );
-
-        assert!(handler.eval(applyp_false, &mut env)?.is_false()?);
-
-        Ok(())
-    }
-    #[test]
-    fn test_lambda_handler_is_valid() -> Result<()> {
-        let mut env = Environment::new();
-        let handler = LambdaHandler {};
-        assert!(list!(sym!("fn")).is_lambda()?,"is_lambda");
-        assert!(handler.is_valid(list!(sym!("fn")), &env.type_manager).is_err(),"is_err");
-        assert!(
-            handler.is_valid(
-                list!(
-                    sym!("fn"), 
-                    list!(), // arguments 
-                    list!(), // returns
-                    list!(), // body
-                ),
-                &env.type_manager
-            )?
-        );
-        assert!(
-            handler.is_valid(
-                list!(
-                    sym!("fn"), 
-                    list!(), // arguments 
-                    //list!(), // returns 
-                    list!(), // body
-                ),
-                &env.type_manager
-            ).is_err()
-        );
-        assert!(handler.is_valid(list!(sym!("fn?"), list!(), list!()), &env.type_manager)?);
-        assert!(handler
-            .is_valid(list!(sym!("fn?"), list!(), list!(), sym!("lll")), &env.type_manager)
-            .is_err());
-        assert!(handler
-            .is_valid(list!(sym!("apply"), list!(), int!(1)), &env.type_manager)
-            .is_err());
-        assert!(handler.is_valid(list!(sym!("apply"), list!(), list!()), &env.type_manager)?);
-        Ok(())
-    }
-
-    #[test]
-    fn test_lambda_handler() -> Result<()> {
-        let mut env = Environment::new();
-        register_default_handlers(&mut env);
-        let handler = LambdaHandler {};
-        assert!(handler.can(list!(sym!("fn")))?);
-        assert!(handler.can(list!(sym!("fn?")))?);
-        assert!(handler.can(list!(sym!("apply")))?);
-        Ok(())
-    }
-    #[test]
-    fn test_op_handler_xor() -> Result<()> {
-        let mut env = Environment::new();
-        register_default_handlers(&mut env);
-
-        let list = list!(sym!("xor?"), bool_t!(), bool_t!(),);
-
-        assert!(eval(list, &mut env)?.is_false()?);
-
-        let list = list!(sym!("xor?"), bool_f!(), bool_f!(),);
-
-        assert!(eval(list, &mut env)?.is_false()?);
-
-        let list = list!(sym!("xor?"), bool_t!(), bool_f!(),);
-
-        assert!(eval(list, &mut env)?.is_true()?);
-        Ok(())
-    }
-
-    #[test]
-    fn test_op_handler_or() -> Result<()> {
-        let mut env = Environment::new();
-        register_default_handlers(&mut env);
-
-        let list = list!(sym!("or?"), bool_t!(), bool_f!(),);
-
-        assert!(eval(list, &mut env)?.is_true()?);
-
-        let list = list!(sym!("or?"), bool_f!(), bool_f!(), bool_f!(), bool_f!(),);
-
-        assert!(eval(list, &mut env)?.is_false()?);
-        Ok(())
-    }
-
-    #[test]
-    fn test_op_handler_and() -> Result<()> {
-        let mut env = Environment::new();
-        register_default_handlers(&mut env);
-
-        let list = list!(sym!("and?"), bool_t!(), bool_t!(),);
-
-        assert!(eval(list, &mut env)?.is_true()?);
-
-        let list = list!(sym!("and?"), bool_t!(), bool_t!(), bool_t!(), bool_f!(),);
-
-        assert!(eval(list, &mut env)?.is_false()?);
-        Ok(())
-    }
-    #[test]
-    fn test_op_handler() -> Result<()> {
-        let h = OpHandler {};
-        let opts = vec!["lt?", "gt?", "eq?", "and?"];
-        for o in opts.iter() {
-            assert!(h.can(list!(sym!(o)))?);
-        }
-
-        let mut env = Environment::new();
-        register_default_handlers(&mut env);
-        let list = list!(sym!("lt?"), int!(5), int!(6),);
-
-        assert!(eval(list, &mut env)?.is_true()?);
-        let list = list!(sym!("lt?"), int!(6), int!(5),);
-
-        assert!(eval(list, &mut env)?.is_false()?);
-
-        let list = list!(sym!("gt?"), int!(6), int!(5),);
-
-        assert!(eval(list, &mut env)?.is_true()?);
-
-        let list = list!(sym!("eq?"), int!(5), int!(5));
-
-        assert!(eval(list, &mut env)?.is_true()?);
-
-        let list = list!(sym!("eq?"), int!(5), int!(3));
-
-        assert!(eval(list, &mut env)?.is_false()?);
-
-        // Equivalent to: (eq (+ 1 (/ 10 5)) 3)
-        let list = list!(
-            sym!("eq?"),
-            list!(
-                sym!("+"), 
-                int!(1), 
-                list!(
-                    sym!("/"), 
-                    int!(10), 
-                    int!(5),
-                ),
-            ),
-            int!(3),
-        );
-
-        assert!(eval(list, &mut env)?.is_true()?);
-
-        let list = list!(sym!("eq?"), sym!("hello"), sym!("hello"));
-
-        assert!(eval(list, &mut env)?.is_true()?);
-        env = env.add("$hello", sym!("world"));
-        let list = list!(sym!("eq?"), sym!("$hello"), sym!("world"));
-
-        assert!(eval(list, &mut env)?.is_true()?);
-
-        Ok(())
-    }
-    // Float Math
-    #[test]
-    fn test_float_remainder() -> Result<()> {
-        let mut env = Environment::new();
-        register_default_handlers(&mut env);
-        let list = list!(
-            sym!("%"),
-            float!(5.0),
-            float!(3.0).as_atom()?,
-        );
-
-        assert_eq!(eval(list, &mut env)?.as_float()?, 2.0);
-        Ok(())
-    }
-    #[test]
-    fn test_float_division() -> Result<()> {
-        let mut env = Environment::new();
-        register_default_handlers(&mut env);
-        let list = list!(
-            sym!("/"),
-            float!(20.0),
-            float!(5.0).as_atom()?,
-        );
-
-        assert_eq!(eval(list, &mut env)?.as_float()?, 4.0);
-
-        let list = list!(
-            sym!("/"),
-            float!(20.0),
-            float!(0.0).as_atom()?,
-        );
-
-        assert!(eval(list, &mut env).is_err());
-        Ok(())
-    }
-    #[test]
-    fn test_float_multiplication() -> Result<()> {
-        let mut env = Environment::new();
-        register_default_handlers(&mut env);
-        let list = list!(
-            sym!("*"),
-            float!(1.0),
-            float!(5.0).as_atom()?,
-            float!(5.0).as_atom()?,
-        );
-
-        assert_eq!(eval(list, &mut env)?.as_float()?, 25.0);
-        Ok(())
-    }
-    #[test]
-    fn test_float_subtraction() -> Result<()> {
-        let mut env = Environment::new();
-        register_default_handlers(&mut env);
-        let list = list!(
-            sym!("-"),
-            float!(3.0),
-            float!(2.0).as_atom()?,
-        );
-        assert_eq!(eval(list, &mut env)?.as_float()?, 1.0);
-        Ok(())
-    }
-    #[test]
-    fn test_float_addition() -> Result<()> {
-        let mut env = Environment::new();
-        register_default_handlers(&mut env);
-        let list = list!(
-            sym!("+"),
-            float!(1.0),
-            float!(1.0).as_atom()?,
-        );
-
-        assert_eq!(eval(list, &mut env)?.as_float()?, 2.0);
-        Ok(())
-    }
-    // Integer Math
-    #[test]
-    fn test_division() -> Result<()> {
-        let mut env = Environment::new();
-        register_default_handlers(&mut env);
-        let list = list!(
-            sym!("/"),
-            int!(20),
-            int!(5).as_atom()?,
-        );
-
-        assert_eq!(eval(list, &mut env)?.as_int()?, 4);
-
-        let list = list!(
-            sym!("/"),
-            int!(20),
-            int!(0).as_atom()?,
-        );
-
-        assert!(eval(list, &mut env).is_err());
-        Ok(())
-    }
-    #[test]
-    fn test_remainder() -> Result<()> {
-        let mut env = Environment::new();
-        register_default_handlers(&mut env);
-        let list = list!(
-            sym!("%"),
-            int!(5),
-            int!(3).as_atom()?,
-        );
-
-        assert_eq!(eval(list, &mut env)?.as_int()?, 2);
-        Ok(())
-    }
-    #[test]
-    fn test_multiplication() -> Result<()> {
-        let mut env = Environment::new();
-        register_default_handlers(&mut env);
-        let list = list!(
-            sym!("*"),
-            int!(1),
-            int!(5).as_atom()?,
-            int!(5).as_atom()?,
-        );
-
-        assert_eq!(eval(list, &mut env)?.as_int()?, 25);
-        Ok(())
-    }
-
-    #[test]
-    fn test_subtraction() -> Result<()> {
-        let mut env = Environment::new();
-        register_default_handlers(&mut env);
-        let list = list!(
-            sym!("-"),
-            int!(1),
-            int!(1).as_atom()?,
-        );
-
-        assert_eq!(eval(list, &mut env)?.as_int()?, 0);
-        Ok(())
-    }
-
-    #[test]
-    fn test_addition() -> Result<()> {
-        let mut env = Environment::new();
-        register_default_handlers(&mut env);
-        let list = list!(
-            sym!("+"),
-            int!(1),
-            int!(1).as_atom()?,
-        );
-
-        assert_eq!(eval(list, &mut env)?.as_int()?, 2);
-        Ok(())
-    }
-
-    #[test]
     fn test_booleans() -> Result<()> {
         assert!(sym!("true").is_true()?);
         assert!(sym!("false").is_false()?);
         assert!(!sym!("false").is_true()?);
         Ok(())
     }
-
-    #[test]
-    fn test_eval_if_true() -> Result<()> {
-        let mut env = Environment::new();
-        register_default_handlers(&mut env);
-
-        let list = list!(
-            sym!("if"),
-            bool_t!(),
-            int!(1).as_atom()?,
-            int!(2).as_atom()?
-        );
-
-        assert_eq!(eval(list, &mut env)?.as_int()?, 1);
-        Ok(())
-    }
-    #[test]
-    fn test_eval_if_false() -> Result<()> {
-        let mut env = Environment::new();
-        register_default_handlers(&mut env);
-        let list = list!(
-            sym!("if"),
-            bool_f!(),
-            int!(1).as_atom()?,
-            int!(2).as_atom()?
-        );
-
-        assert_eq!(eval(list, &mut env)?.as_int()?, 2);
-        Ok(())
-    }
-    #[test]
-    fn test_eval_if_true_var() -> Result<()> {
-        let mut env = Environment::new();
-        register_default_handlers(&mut env);
-        let list = list!(
-            sym!("if"),
-            sym!("true_var"),
-            int!(1).as_atom()?,
-            int!(2).as_atom()?
-        );
-        env = env.add(
-            "true_var",
-            bool_t!(),
-        );
-        assert_eq!(eval(list.clone(), &mut env)?.as_int()?, 1);
-        // Make sure an Exp => List
-        assert_eq!(eval(list.as_exp()?, &mut env)?.as_int()?, 1);
-        Ok(())
-    }
     #[test]
     fn test_eval() -> Result<()> {
         let mut env = Environment::new();
-        register_default_handlers(&mut env);
+        register_default_peloteurs(&mut env);
         let sym = sym!("hello");
         env = env.add("hello", sym.clone());
         // It should look variables up
