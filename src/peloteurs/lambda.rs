@@ -2,22 +2,22 @@ use crate::*;
 #[derive(Clone)]
 pub struct Lambda {}
 impl Peloteur for Lambda {
-    fn get_param_types(&self, root: Form, manager: &TypeDeclManager) -> Result<TypeDecl> {
+    fn get_param_types(&self, root: Form, manager: &TypeManager) -> Result<Type> {
         let list_root = root.as_list()?;
         let h = list_root.head()?;
         if sym_matches!(h, "fn") {
-            Ok(TypeDecl::TListOf(vec![TypeDecl::TList,TypeDecl::TList,TypeDecl::TList]))
+            Ok(Type::TListOf(vec![Type::TList,Type::TList,Type::TList]))
         } else if sym_matches!(h, "fn?") {
-            Ok(TypeDecl::TUnion(vec![TypeDecl::TList,TypeDecl::TSymbol]))
+            Ok(Type::TUnion(vec![Type::TList,Type::TSymbol]))
         } else if sym_matches!(h, "applicable?") {
-            Ok(TypeDecl::TList)
+            Ok(Type::TList)
         } else if sym_matches!(h, "apply") {
-            Ok(TypeDecl::TListOf(vec![TypeDecl::TUnion(vec![TypeDecl::TSymbol,TypeDecl::TLambda]),TypeDecl::TList]))
+            Ok(Type::TListOf(vec![Type::TUnion(vec![Type::TSymbol,Type::TLambda]),Type::TList]))
         } else {
             Err(internal!("cannot determine param types"))
         }
     }
-    fn is_valid(&self, root: Form, manager: &TypeDeclManager) -> Result<bool> {
+    fn is_valid(&self, root: Form, manager: &TypeManager) -> Result<bool> {
         let list_root = root.as_list()?;
         let h = list_root.head()?;
         match &list_root {
@@ -125,7 +125,7 @@ impl Peloteur for Lambda {
                 for el in &list[2].clone().as_vec()? {
                     v.push(el.clone());
                 }
-                eval(Form::List(v,TypeInfo::default()), env)
+                eval(Form::List(v,Info::default()), env)
             } else if list[1].is_lambda()? { // (apply (fn (a b) (+ a b)) (1 2))
                 let lambda = list[1].clone();
                 let arg_values = list[2].clone();

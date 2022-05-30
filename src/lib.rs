@@ -5,15 +5,15 @@ mod peloteurs;
 #[macro_export]
 macro_rules! sym {
     ($s:expr) => {
-        Form::Symbol($s.to_string(), TypeInfo::new(0,0,TypeDecl::TString))
+        Form::Symbol($s.to_string(), Info::new(0,0,Type::TString))
     };
     ($s:expr,$l:expr,$c:expr) => {
         Form::Symbol(
             $s.to_string(),
-            TypeInfo::new(
+            Info::new(
                 $l,
                 $c,
-                TypeDecl::TString,
+                Type::TString,
             ),
         )
     };
@@ -21,15 +21,15 @@ macro_rules! sym {
 #[macro_export]
 macro_rules! int {
     ($i:expr) => {
-        Form::Number(Numerical::Int64($i), TypeInfo::new(0, 0, TypeDecl::TInt64))
+        Form::Number(Numerical::Int64($i), Info::new(0, 0, Type::TInt64))
     };
     ($i:expr,$l:expr,$c:expr) => {
         Form::Number(
             Numerical::Int64($i),
-            TypeInfo::new(
+            Info::new(
                 $l,
                 $c,
-                TypeDecl::TInt64,
+                Type::TInt64,
             ),
         )
     };
@@ -37,15 +37,15 @@ macro_rules! int {
 #[macro_export]
 macro_rules! float {
     ($i:expr) => {
-        Form::Number(Numerical::Float64($i), TypeInfo::new(0,0,TypeDecl::TFloat64))
+        Form::Number(Numerical::Float64($i), Info::new(0,0,Type::TFloat64))
     };
     ($i:expr,$l:expr,$c:expr) => {
         Form::Number(
             Numerical::Float64($i),
-            TypeInfo::new(
+            Info::new(
                 $l,
                 $c,
-                TypeDecl::TFloat64,
+                Type::TFloat64,
             ),
         )
     };
@@ -53,22 +53,22 @@ macro_rules! float {
 #[macro_export]
 macro_rules! bool_t {
     () => {
-        Form::Atom(Atomic::Boolean(Logical::True, TypeInfo::new(0,0,TypeDecl::TBoolean)))
+        Form::Atom(Atomic::Boolean(Logical::True, Info::new(0,0,Type::TBoolean)))
     };
 }
 #[macro_export]
 macro_rules! bool_f {
     () => {
-        Form::Atom(Atomic::Boolean(Logical::False, TypeInfo::new(0,0,TypeDecl::TBoolean)))
+        Form::Atom(Atomic::Boolean(Logical::False, Info::new(0,0,Type::TBoolean)))
     };
 }
 #[macro_export]
 macro_rules! list {
     () => (
-        Form::List(Vec::new(),TypeInfo::default())
+        Form::List(Vec::new(),Info::default())
     );
     ($($x:expr),+ $(,)?) => (
-        Form::List(vec![$($x),+],TypeInfo::default())
+        Form::List(vec![$($x),+],Info::default())
     );
 }
 #[macro_export]
@@ -106,7 +106,7 @@ pub enum LustError {
 static NON_LIST_FN: &str = "cannot called on non list";
 type Result<T> = std::result::Result<T, LustError>;
 #[derive(Debug, Clone, PartialEq)]
-enum TypeDecl {
+enum Type {
     TUndeclared,
     TAny,
     TInt64,
@@ -115,14 +115,14 @@ enum TypeDecl {
     TSymbol,
     TBoolean,
     TLambda, // Generic lambda
-    TLambdaOf(Box<TypeDecl>,Box<TypeDecl>), // ListOf types in, ListOf types out
+    TLambdaOf(Box<Type>,Box<Type>), // ListOf types in, ListOf types out
     TList,
-    TListOf(Vec<TypeDecl>),
-    TUnion(Vec<TypeDecl>),
+    TListOf(Vec<Type>),
+    TUnion(Vec<Type>),
     TUser(usize), 
 }
-impl TypeDecl {
-    fn as_boxed(&self) -> Box<TypeDecl> {
+impl Type {
+    fn as_boxed(&self) -> Box<Type> {
         Box::new(self.clone())
     }
     fn same_as(&self, other: &Self) -> bool {
@@ -185,10 +185,10 @@ impl TypeDecl {
     }
 }
 #[derive(Clone)]
-struct TypeDeclManager {
+struct TypeManager {
     user_defined_types: Vec<String>,
 }
-impl TypeDeclManager {
+impl TypeManager {
     fn new() -> Self {
         Self {
             user_defined_types: vec![],
@@ -206,42 +206,42 @@ impl TypeDeclManager {
         self.user_defined_types.push(utype);
         Ok(self.user_defined_types.len() - 1)
     }
-    fn parse_str(&self,tstr: &str) -> Result<TypeDecl> {
+    fn parse_str(&self,tstr: &str) -> Result<Type> {
         match tstr {
-            "any_t" => Ok(TypeDecl::TAny),
-            "i64_t" | "i_t" => Ok(TypeDecl::TInt64),
-            "f64_t" | "f_t" => Ok(TypeDecl::TFloat64),
-            "str_t" | "s_t" => Ok(TypeDecl::TString),
-            "bool_t"| "b_t" => Ok(TypeDecl::TBoolean),
-            "list_t" | "l_t" => Ok(TypeDecl::TList),
+            "any_t" => Ok(Type::TAny),
+            "i64_t" | "i_t" => Ok(Type::TInt64),
+            "f64_t" | "f_t" => Ok(Type::TFloat64),
+            "str_t" | "s_t" => Ok(Type::TString),
+            "bool_t"| "b_t" => Ok(Type::TBoolean),
+            "list_t" | "l_t" => Ok(Type::TList),
             _ => {
                 let as_str = tstr.to_string();
                 for (i,user_type) in self.user_defined_types.iter().enumerate() {
                    if as_str == *user_type {
-                       return Ok(TypeDecl::TUser(i)); 
+                       return Ok(Type::TUser(i)); 
                    }
                 }
                 Err(internal!(format!("{} is not a defined type",as_str)))
             }
         }
     }
-    fn parse_form(&self,typ: Form) -> Result<TypeDecl> {
+    fn parse_form(&self,typ: Form) -> Result<Type> {
         match &typ {
             Form::List(lst,..) => {
                 if typ.is_lambda()? {
                    let in_def = typ.get_param_types(self)?;
                    let out_def = typ.get_result_types(self)?;
-                   Ok(TypeDecl::TLambdaOf(in_def.as_boxed(),out_def.as_boxed()))
+                   Ok(Type::TLambdaOf(in_def.as_boxed(),out_def.as_boxed()))
                 } else {
                     let mut types = vec![];
                     for t in lst {
                         types.push(self.parse_form(t.clone())?);
                     }
-                    Ok(TypeDecl::TListOf(types))
+                    Ok(Type::TListOf(types))
                 }
             },
             Form::Symbol(s,..) => Ok(self.parse_str(s)?),
-            _ => Err(internal!(format!("cannot convert {:?} to a TypeDecl",typ))),
+            _ => Err(internal!(format!("cannot convert {:?} to a Type",typ))),
         }
     }
     fn is_type_keyword(&self, typ: Form) -> bool {
@@ -260,17 +260,17 @@ impl TypeDeclManager {
     }
 }
 #[derive(Debug, Clone)]
-struct TypeInfo {
+struct Info {
     line: usize,
     column: usize,
-    decl: TypeDecl,
+    decl: Type,
 }
-impl TypeInfo {
-    fn new(l: usize, c: usize, d: TypeDecl) -> Self {
+impl Info {
+    fn new(l: usize, c: usize, d: Type) -> Self {
         Self { line: l, column: c, decl: d }
     }
     fn default() -> Self {
-        Self::new(0,0,TypeDecl::TAny)
+        Self::new(0,0,Type::TAny)
     }
 }
 #[derive(Debug, Clone)]
@@ -287,7 +287,7 @@ enum Logical {
 enum Atomic {
     Symbol(Box<Form>),
     Number(Box<Form>),
-    Boolean(Logical, TypeInfo),
+    Boolean(Logical, Info),
 }
 #[derive(Debug, Clone)]
 enum Expressable {
@@ -296,16 +296,16 @@ enum Expressable {
 }
 #[derive(Debug, Clone)]
 enum Form {
-    Symbol(String, TypeInfo),
-    Number(Numerical, TypeInfo),
+    Symbol(String, Info),
+    Number(Numerical, Info),
     /// Symbol, Number
     Atom(Atomic),
-    List(Vec<Form>,TypeInfo),
+    List(Vec<Form>,Info),
     /// Atom, List
     Exp(Expressable),
 }
 impl Form {
-    fn get_type(&self) -> TypeDecl {
+    fn get_type(&self) -> Type {
         match self {
             Self::Atom(Atomic::Number(ref n)) => {
                if let Self::Number(_,info) = &**n {
@@ -315,14 +315,14 @@ impl Form {
                }
             }, 
             Self::Number(_,info) => info.decl.clone(),
-            Self::List(..) => TypeDecl::TList,
+            Self::List(..) => Type::TList,
             Self::Symbol(_,info) => info.decl.clone(),
             Self::Exp(Expressable::Atom(a)) => a.get_type(),
-            Self::Exp(Expressable::List(..)) => TypeDecl::TList,
+            Self::Exp(Expressable::List(..)) => Type::TList,
             _ => panic!("wtf"),
        }
     }
-    fn get_param_types(&self, manager: &TypeDeclManager) -> Result<TypeDecl> {
+    fn get_param_types(&self, manager: &TypeManager) -> Result<Type> {
         match self {
             Form::List(elements,..) => {
                 let mut in_types = vec![];
@@ -334,12 +334,12 @@ impl Form {
                     }
                     i += 1;
                 }
-                Ok(TypeDecl::TListOf(in_types))
+                Ok(Type::TListOf(in_types))
             },
             _ => Err(internal!("not a lambda!")),
         }
     }
-    fn get_result_types(&self, manager: &TypeDeclManager) -> Result<TypeDecl> {
+    fn get_result_types(&self, manager: &TypeManager) -> Result<Type> {
         match self {
             Form::List(elements,..) => {
                 let mut out_types = vec![];
@@ -347,7 +347,7 @@ impl Form {
                 for e in lst.as_vec()?.into_iter() {
                     out_types.push(manager.parse_form(e)?);
                 }
-                Ok(TypeDecl::TListOf(out_types))
+                Ok(Type::TListOf(out_types))
             },
             _ => Err(internal!("not a lambda!")),
         }
@@ -357,7 +357,7 @@ impl Form {
        let other_type = other.get_type();
        self_type == other_type
     }
-    fn is_type(&self, typ: TypeDecl) -> bool {
+    fn is_type(&self, typ: Type) -> bool {
         self.get_type() == typ
     }
     fn is_atom(&self) -> bool {
@@ -539,9 +539,9 @@ impl Form {
     }
 }
 trait Peloteur: DynClone {
-    fn get_param_types(&self,root: Form, manager: &TypeDeclManager) -> Result<TypeDecl>;
+    fn get_param_types(&self,root: Form, manager: &TypeManager) -> Result<Type>;
     fn can(&self, root: Form) -> Result<bool>;
-    fn is_valid(&self, root: Form, manager: &TypeDeclManager) -> Result<bool>;
+    fn is_valid(&self, root: Form, manager: &TypeManager) -> Result<bool>;
     fn eval(&self, root: Form, env: &mut Environment) -> Result<Form>;
     //fn get_param_types(&self, root: Form, env: &mut Environment) -> Result<bool>;
     //fn get_result_types(&self, root: Form, env: &mut Environment) -> Result<bool>;
@@ -549,7 +549,7 @@ trait Peloteur: DynClone {
 dyn_clone::clone_trait_object!(Peloteur);
 #[derive(Clone)]
 struct Environment {
-    type_manager: TypeDeclManager,
+    type_manager: TypeManager,
     vars: HashMap<String, Form>,
     peloteurs: Vec<Box<dyn Peloteur>>,
 }
@@ -558,7 +558,7 @@ impl Environment {
         Self {
             vars: HashMap::new(),
             peloteurs: vec![],
-            type_manager: TypeDeclManager::new(),
+            type_manager: TypeManager::new(),
         }
     }
     fn register(&mut self, peloteur: Box<dyn Peloteur>) {
@@ -641,7 +641,7 @@ fn read_from_tokens(tokens: &[String], start: usize) -> Result<(Form, usize)> {
             i = i2;
         }
         i += 1;
-        Ok((Form::List(list,TypeInfo::default()).as_exp()?, i))
+        Ok((Form::List(list,Info::default()).as_exp()?, i))
     } else if is_rparen(&*tokens[i]) {
         Err(unexpected!("anything", ")"))
     } else {
@@ -700,22 +700,22 @@ mod tests {
     use super::*;
     #[test]
     fn test_typedecl_comparison_lambda() -> Result<()> {
-        let t1 = TypeDecl::TUnion(vec![TypeDecl::TInt64, TypeDecl::TUser(33)]);
-        let t2 = TypeDecl::TUnion(vec![TypeDecl::TUser(33),TypeDecl::TInt64]);
-        let t3 = TypeDecl::TListOf(vec![TypeDecl::TSymbol,TypeDecl::TString]);
-        let l1 = TypeDecl::TLambdaOf(t1.as_boxed(),t2.as_boxed());
-        let l2 = TypeDecl::TLambdaOf(t1.as_boxed(),t3.as_boxed());
-        let l3 = TypeDecl::TLambdaOf(t1.as_boxed(),t2.as_boxed());
+        let t1 = Type::TUnion(vec![Type::TInt64, Type::TUser(33)]);
+        let t2 = Type::TUnion(vec![Type::TUser(33),Type::TInt64]);
+        let t3 = Type::TListOf(vec![Type::TSymbol,Type::TString]);
+        let l1 = Type::TLambdaOf(t1.as_boxed(),t2.as_boxed());
+        let l2 = Type::TLambdaOf(t1.as_boxed(),t3.as_boxed());
+        let l3 = Type::TLambdaOf(t1.as_boxed(),t2.as_boxed());
         assert!(!l1.same_as(&l2));
         assert!(l3.same_as(&l1));
         Ok(())
     }
     #[test]
     fn test_typedecl_comparison() -> Result<()> {
-        let t1 = TypeDecl::TUnion(vec![TypeDecl::TInt64, TypeDecl::TUser(33)]);
-        let t2 = TypeDecl::TUnion(vec![TypeDecl::TUser(33),TypeDecl::TInt64]);
-        let t3 = TypeDecl::TListOf(vec![TypeDecl::TSymbol,TypeDecl::TString]);
-        let t4 = TypeDecl::TListOf(vec![TypeDecl::TString, TypeDecl::TSymbol]);
+        let t1 = Type::TUnion(vec![Type::TInt64, Type::TUser(33)]);
+        let t2 = Type::TUnion(vec![Type::TUser(33),Type::TInt64]);
+        let t3 = Type::TListOf(vec![Type::TSymbol,Type::TString]);
+        let t4 = Type::TListOf(vec![Type::TString, Type::TSymbol]);
         assert!(t1.same_as(&t2));
         assert!(!t3.same_as(&t4), "same_as {:?} == {:?}", t3.to_ord(),t4.to_ord());
         assert!(t3.similar_to(&t4));
@@ -723,7 +723,7 @@ mod tests {
     }
     #[test]
     fn test_form_get_param_types() -> Result<()> {
-        let mut manager = TypeDeclManager::new();
+        let mut manager = TypeManager::new();
         let i = manager.add_str("CustomType");
         let lambda = list!( // (lambda (a i_t) (i_t) (+ a 1))
             sym!("fn"),
@@ -744,13 +744,13 @@ mod tests {
         );
         let typ = manager.parse_form(lambda)?;
         match typ {
-            TypeDecl::TLambdaOf(idef,odef) => {
+            Type::TLambdaOf(idef,odef) => {
                match *idef {
-                    TypeDecl::TListOf(v) => assert_eq!(v, vec![TypeDecl::TInt64,TypeDecl::TUser(0)],"in def is wrong vec"),
+                    Type::TListOf(v) => assert_eq!(v, vec![Type::TInt64,Type::TUser(0)],"in def is wrong vec"),
                     _ => unreachable!("in def is wrong"),
                };
                match *odef {
-                    TypeDecl::TListOf(v) => assert_eq!(v, vec![TypeDecl::TInt64],"out def is wrong vec"),
+                    Type::TListOf(v) => assert_eq!(v, vec![Type::TInt64],"out def is wrong vec"),
                     _ => unreachable!("out def is wrong"),
                }
             }
@@ -760,7 +760,7 @@ mod tests {
     }
     #[test]
     fn test_typedeclmanager_is_type_keyword() -> Result<()> {
-        let mut manager = TypeDeclManager::new();
+        let mut manager = TypeManager::new();
         let i = manager.add_str("CustomType");
         let types = vec!["any_t","i64_t","i_t","f64_t","f_t","str_t","s_t","bool_t","b_t","fn_t","list_t","l_t"];
         for v in &types {
@@ -772,9 +772,9 @@ mod tests {
     }
     #[test]
     fn test_typedeclmanager() -> Result<()> {
-        let mut manager = TypeDeclManager::new();
+        let mut manager = TypeManager::new();
         manager.user_defined_types.push("CustomType".to_string());
-        assert_eq!(manager.parse_str("CustomType").unwrap(),TypeDecl::TUser(0));
+        assert_eq!(manager.parse_str("CustomType").unwrap(),Type::TUser(0));
         let i = manager.add_str("CustomType");
         assert!(i.is_err());
         let i = manager.add_str("CustomType2");
@@ -859,10 +859,10 @@ mod tests {
     fn test_form_as_number() -> Result<()> {
         let atom = int!(1).as_atom()?;
         assert_eq!(atom.clone().as_number()?.as_int()?, 1);
-        assert!(atom.as_number()?.is_type(TypeDecl::TInt64));
+        assert!(atom.as_number()?.is_type(Type::TInt64));
         let atom = float!(3.4).as_atom()?;
         assert_eq!(atom.clone().as_number()?.as_float()?, 3.4);
-        assert!(atom.as_number()?.is_type(TypeDecl::TFloat64));
+        assert!(atom.as_number()?.is_type(Type::TFloat64));
         Ok(())
     }
 

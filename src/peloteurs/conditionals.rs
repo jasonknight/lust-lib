@@ -2,10 +2,10 @@ use crate::*;
 #[derive(Clone)]
 pub struct If {}
 impl Peloteur for If {
-    fn get_param_types(&self, root: Form, manager: &TypeDeclManager) -> Result<TypeDecl> {
-        Ok(TypeDecl::TAny)
+    fn get_param_types(&self, root: Form, manager: &TypeManager) -> Result<Type> {
+        Ok(Type::TAny)
     }
-    fn is_valid(&self, root: Form, _manager: &TypeDeclManager) -> Result<bool> {
+    fn is_valid(&self, root: Form, _manager: &TypeManager) -> Result<bool> {
         let list = root.as_list()?.as_vec()?;
         if list.len() != 4 {
             return Err(LustError::Semantic(

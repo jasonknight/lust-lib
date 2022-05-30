@@ -2,10 +2,10 @@ use crate::*;
 #[derive(Clone)]
 pub struct Math {}
 impl Peloteur for Math {
-    fn get_param_types(&self, root: Form, manager: &TypeDeclManager) -> Result<TypeDecl> {
-        Ok(TypeDecl::TAny)
+    fn get_param_types(&self, root: Form, manager: &TypeManager) -> Result<Type> {
+        Ok(Type::TAny)
     }
-    fn is_valid(&self, _root: Form, _manager: &TypeDeclManager) -> Result<bool> {
+    fn is_valid(&self, _root: Form, _manager: &TypeManager) -> Result<bool> {
         Ok(true)
     }
     fn can(&self, root: Form) -> Result<bool> {
